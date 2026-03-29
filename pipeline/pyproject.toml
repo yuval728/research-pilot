@@ -30,3 +30,15 @@ dev = [
     "freezegun>=1.5.1",
     "types-PyYAML",
 ]
+
+[tool.mypy]
+# Pydantic plugin — teaches mypy about field defaults so optional fields
+# don't require explicit arguments at call sites.
+plugins = ["pydantic.mypy"]
+python_version = "3.12"
+
+# Pydantic-specific plugin options
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
