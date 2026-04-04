@@ -34,6 +34,7 @@ from pipeline.core.config import (
 _REQUIRED_ENV = {
     "GEMINI_API_KEY": "test-key",
     "SUPABASE_URL": "https://test.supabase.co",
+    "SUPABASE_DB_URL": "postgresql://test:test@localhost/test",
     "SUPABASE_ANON_KEY": "anon-key",
     "SUPABASE_SERVICE_ROLE_KEY": "service-key",
     "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
@@ -126,11 +127,11 @@ class TestEnvVarOverrides:
         get_settings.cache_clear()
 
     def test_override_environment(self):
-        s = _settings_with_env(APP__ENVIRONMENT="production")
+        s = _settings_with_env(ENVIRONMENT="production")
         assert s.environment == "production"
 
     def test_override_log_level(self):
-        s = _settings_with_env(APP__LOG_LEVEL="DEBUG")
+        s = _settings_with_env(LOG_LEVEL="DEBUG")
         assert s.log_level == "DEBUG"
 
     def test_override_gemini_temperature(self):

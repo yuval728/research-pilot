@@ -208,7 +208,6 @@ def with_validation_retry(fn: _F) -> _F:
         stop=stop_after_attempt(_MAX_ATTEMPTS),
         wait=wait_exponential_jitter(initial=0.5, max=5, jitter=0.5),
         after=_log_retry,
-        retry_error_callback=_log_final_failure,
         reraise=True,
     )(fn)
 
