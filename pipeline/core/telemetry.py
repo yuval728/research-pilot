@@ -168,7 +168,7 @@ class TelemetryCollector:
                 host=settings.langfuse.host,
             )
 
-            lf.generation(
+            lf.generation(  # type: ignore[attr-defined]
                 trace_id=record.run_id,
                 name=f"{record.stage_name}.llm_call",
                 model=record.model,

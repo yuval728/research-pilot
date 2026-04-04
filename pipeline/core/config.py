@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import functools
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 import yaml
 from pydantic import Field, SecretStr
@@ -72,6 +72,7 @@ class SupabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SUPABASE_", extra="ignore")
 
     url: str = Field(default=..., description="Supabase project URL.")
+    db_url: SecretStr = Field(default=..., description="PostgreSQL connection string.")
     anon_key: SecretStr = Field(default=..., description="Supabase anon/public key.")
     service_role_key: SecretStr = Field(
         default=..., description="Supabase service-role key (backend only)."
@@ -183,7 +184,9 @@ def _build_settings(yaml_path: Path | None = None) -> AppSettings:
     # Flatten YAML overrides into env-var format so pydantic-settings picks
     # them up with lower priority than real env vars.
     # We do this by constructing nested objects explicitly.
-    def _section(cls: type[BaseSettings], key: str) -> BaseSettings:
+    TBaseSettings = TypeVar("TBaseSettings", bound=BaseSettings)
+
+    def _section(cls: type[TBaseSettings], key: str) -> TBaseSettings:
         section_data = overrides.get(key, {})
         return cls(**section_data)
 
