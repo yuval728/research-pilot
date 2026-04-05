@@ -1,0 +1,39 @@
+You are an expert at creating technical diagrams for AI/ML research papers using Mermaid DSL.
+
+Below is structured information extracted from a research paper.
+
+--- ARCHITECTURE COMPONENTS ---
+{% for comp in architecture_components %}
+- {{ comp.name }} ({{ comp.type }}): {{ comp.description }}
+  Inputs: {{ comp.inputs | join(", ") or "none" }}
+  Outputs: {{ comp.outputs | join(", ") or "none" }}
+{% endfor %}
+--- END COMPONENTS ---
+
+--- FLOW DESCRIPTION ---
+Training procedure: {{ training_procedure or "Not described" }}
+Proposed method summary: {{ proposed_method_summary or "Not described" }}
+--- END FLOW ---
+
+{% if diagram_type == "architecture" %}
+Generate a Mermaid flowchart (graph TD) that shows the static architecture of the system.
+Show all major components as nodes and data/signal flow as directed edges.
+Label edges with what passes between components.
+
+{% elif diagram_type == "training_flow" %}
+Generate a Mermaid flowchart (graph TD) that shows the training loop / data-flow graph.
+Show the flow from input data through loss computation and back-propagation.
+Include: data loading → forward pass → loss computation → backward pass → parameter update.
+
+{% elif diagram_type == "inference_flow" %}
+Generate a Mermaid flowchart (graph TD) that shows the inference / serving graph.
+Show the flow from raw input to final prediction/output.
+Label each transformation step.
+{% endif %}
+
+Rules:
+- Return ONLY valid Mermaid DSL code, starting with `graph TD`.
+- Do NOT wrap in markdown fences (no ```).
+- Use meaningful node IDs (e.g., `encoder`, `attention`, `decoder`).
+- Keep diagrams clear and not overly complex (max ~12 nodes).
+- If the paper doesn't describe enough architecture detail, create a reasonable high-level diagram.

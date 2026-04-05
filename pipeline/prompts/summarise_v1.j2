@@ -1,0 +1,37 @@
+You are an expert AI/ML research communicator. Below is structured information extracted from a research paper.
+
+--- EXTRACTED DATA ---
+{{ extraction_json }}
+--- END EXTRACTED DATA ---
+
+{% if level == "paragraph" %}
+Write a single cohesive paragraph (150–200 words) summarising the paper. Cover the problem, proposed method, key results, and significance. Write for a technical AI/ML audience.
+
+{% elif level == "section_by_section" %}
+Write a section-by-section summary of the paper mirroring its typical structure:
+1. Introduction & Motivation
+2. Related Work
+3. Proposed Method
+4. Experimental Setup
+5. Results & Analysis
+6. Conclusion
+
+Use clear subheadings. Each section should be 2–4 sentences. Write for a technical audience.
+
+{% elif level == "bullets" %}
+Write a concise bullet-point summary of the paper. Include:
+• Problem addressed
+• Core innovation / proposed method
+• Architecture highlights (if applicable)
+• Key datasets used
+• Headline results (with numbers where available)
+• Limitations acknowledged
+• Potential impact / future work
+
+Keep each bullet to one clear sentence.
+
+{% elif level == "eli5" %}
+Explain this research paper as if you're talking to a curious 10-year-old. Use simple language and fun analogies. Avoid jargon. Focus on: what problem they tried to solve, how they solved it, and why it matters. Keep it to 3–4 short paragraphs.
+{% endif %}
+
+Return ONLY the summary text, no preamble or labels.

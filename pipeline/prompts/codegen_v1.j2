@@ -1,0 +1,46 @@
+You are an expert PyTorch engineer. Your task is to generate a clean, well-documented PyTorch implementation skeleton for the AI/ML model described in a research paper.
+
+--- PAPER DETAILS ---
+Task: {{ task or "Not specified" }}
+Proposed method: {{ proposed_method_summary or "Not described" }}
+
+Architecture components:
+{% for comp in architecture_components %}
+- {{ comp.name }} ({{ comp.type }}): {{ comp.description }}
+  Inputs: {{ comp.inputs | join(", ") or "N/A" }}
+  Outputs: {{ comp.outputs | join(", ") or "N/A" }}
+{% endfor %}
+
+Training procedure: {{ training_procedure or "Not described" }}
+Loss functions: {{ loss_functions | join(", ") or "Not specified" }}
+
+Datasets used:
+{% for ds in datasets %}
+- {{ ds.name }}: {{ ds.size or "unknown size" }}, modality: {{ ds.modality or "unknown" }}
+{% endfor %}
+--- END PAPER DETAILS ---
+
+Generate a complete Python file containing:
+
+1. **Imports** — only standard library, numpy, and PyTorch (torch, torch.nn, torch.optim).
+
+2. **Model class(es)** — one `nn.Module` class per major architecture component, plus a top-level model class that composes them. Include realistic `__init__` and `forward` methods with type hints. Add a docstring to each class.
+
+3. **Training loop** — a `train_one_epoch(model, dataloader, optimizer, criterion)` function implementing the training step described in the paper. Include loss logging.
+
+4. **Inference function** — a `run_inference(model, input_tensor)` function.
+
+5. **Synthetic data generation** — a `generate_synthetic_data(batch_size, ...)` function that creates realistic dummy inputs matching the paper's described input format using numpy (no Faker dependency in this file).
+
+6. **Main block** — a `if __name__ == "__main__":` block that:
+   - Creates the model
+   - Generates synthetic data
+   - Runs one forward pass
+   - Prints output shape
+
+Rules:
+- Every class and function must have Google-style docstrings.
+- Use type hints everywhere.
+- Do NOT include actual training on real datasets — this is a skeleton.
+- Use `# TODO: <description>` comments where implementation details are paper-specific.
+- Return ONLY valid Python code. No markdown, no fences, no explanations outside comments.
