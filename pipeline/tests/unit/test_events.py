@@ -107,7 +107,7 @@ class TestWildcardHandlers:
     def setup_method(self):
         self.bus = EventBus()
 
-    def test_wildcard_receives_all_events(self):
+    def test_wildcard_receives_all_events(self) -> None:
         received: list[EventType] = []
         self.bus.subscribe(None, lambda e: received.append(e.type))
 

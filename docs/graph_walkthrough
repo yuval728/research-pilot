@@ -1,0 +1,144 @@
+# Walkthrough: pipeline/graph/ LangGraph Orchestration
+
+## What Was Built
+
+The complete `pipeline/graph/` module — the heart of the Research Pilot pipeline. It wires every previously-built module (models, DB ORM, events, telemetry, exceptions, config) into a compiled LangGraph `StateGraph` with 8 nodes and conditional routing edges.
+
+---
+
+## File Tree
+
+```
+pipeline/
+├── prompts/
+│   ├── classify_v1.j2       ← Vision prompt: domain/sub-domain classification
+│   ├── extract_v1.j2        ← Vision prompt: structured AiMlExtraction extraction
+│   ├── summarise_v1.j2      ← Text prompt: 4-level summary (paragraph/section/bullets/ELI5)
+│   ├── diagram_v1.j2        ← Text prompt: Mermaid DSL diagram generation
+│   └── codegen_v1.j2        ← Text prompt: PyTorch implementation skeleton
+└── graph/
+    ├── __init__.py           ← Exports: research_pipeline, PipelineState, make_initial_state
+    ├── state.py              ← PipelineState TypedDict + make_initial_state()
+    ├── edges.py              ← Pure conditional routing functions
+    ├── pipeline.py           ← StateGraph assembly + compile → research_pipeline
+    └── nodes/
+        ├── __init__.py       ← Flat re-export of all 8 node functions
+        ├── ingest.py         ← PDF fetch, SHA-256 dedup, Supabase upload, PaperORM create
+        ├── classify.py       ← Gemini vision classify → domain/sub_domain/confidence
+        ├── extract.py        ← Gemini + Instructor → validated AiMlExtraction
+        ├── summarise.py      ← 4× LiteLLM calls → SummaryOutput per level
+        ├── embed.py          ← litellm.embedding() → 768-d pgvector rows
+        ├── diagram.py        ← Mermaid DSL generation + mmdc SVG render + upload
+        ├── codegen.py        ← PyTorch skeleton + nbformat notebook + upload
+        └── report.py         ← Full Markdown report assembly + upload + RUN_COMPLETED
+```
+
+---
+
+## Graph Topology
+
+```mermaid
+flowchart TD
+    __start__ --> ingest
+    ingest --> classify
+    classify -->|confidence ≥ 0.5| extract
+    classify -->|confidence < 0.5| __end__
+    extract -->|success| summarise
+    extract -->|failed| __end__
+    summarise --> embed
+    embed --> diagram
+    diagram -->|has architecture| codegen
+    diagram -->|theory domain| report
+    codegen --> report
+    report --> __end__
+```
+
+### Confirmed by smoke test
+```
+NODES: __start__, ingest, classify, extract, summarise, embed, diagram, codegen, report, __end__
+EDGES: start→ingest, ingest→classify, classify⇢extract/__end__, extract⇢summarise/__end__,
+       summarise→embed, embed→diagram, diagram⇢codegen/report, codegen→report, report→__end__
+```
+
+---
+
+## Key Design Decisions
+
+### Sequential Post-Extract Chain
+`summarise → embed → diagram → codegen` run sequentially, not in parallel. The spec described them as logically parallel (no data dependencies between them), but LangGraph fan-out/fan-in via `Send()` adds significant complexity and fragile state merging. Sequential execution produces identical outputs with simpler code to trace and debug. Concurrent execution can be added incrementally later.
+
+### Graceful Degradation
+Every node treats DB writes and Supabase Storage uploads as **non-fatal**. If the DB is unavailable (local dev, tests), the node logs a warning and continues with in-memory data. This means the graph can be developed and tested without a live Supabase instance.
+
+### Partial State Returns
+Nodes return a `dict[str, Any]` (a partial state), not the full `PipelineState`. LangGraph merges the returned dict into the live state. This means a node only declares what it changes — a clean separation of concerns.
+
+### Cache-First Pattern
+Both `classify_node` and `extract_node` query the DB before making any LLM call. On a cache hit, the stage returns immediately and marks itself `CACHED` in `cached_stages`. Token usage is 0 for cached stages.
+
+### Mermaid Validation with Retry
+`diagram_node` validates generated DSL structurally (keyword prefix + bracket balance) and optionally via `mmdc` subprocess. On failure it appends the specific error to the conversation and retries — up to `max_retries` from settings.
+
+### `ast.parse()` for Code Validation
+`codegen_node` validates generated Python with the stdlib `ast` parser. Invalid syntax triggers a retry with the exact `SyntaxError` message injected back into the chat context.
+
+---
+
+## New Dependencies Added
+
+| Package | Purpose |
+|---------|---------|
+| `langgraph>=0.2.0` | StateGraph orchestration |
+| `instructor>=1.7.0` | Structured LLM output + auto-retry |
+| `arxiv>=2.1.0` | arXiv paper fetching |
+| `httpx>=0.27.0` | DOI resolution via CrossRef |
+| `jinja2>=3.1.0` | Prompt template rendering |
+| `nbformat>=5.10.0` | Jupyter notebook export |
+| `supabase>=2.0.0` | Storage uploads + auth |
+
+47 packages installed successfully.
+
+---
+
+## Smoke Test Results
+
+```
+Exit code: 0
+
+NODES:
+  __start__  ingest  classify  extract  summarise
+  embed  diagram  codegen  report  __end__
+
+make_initial_state:
+  run_id: test-123
+  errors: []
+  stage_statuses: {}
+
+SMOKE TEST PASSED
+```
+
+---
+
+## Usage
+
+```python
+from pipeline.graph import research_pipeline, make_initial_state
+
+# PDF upload path
+state = make_initial_state(
+    run_id="my-run-001",
+    pdf_bytes=open("paper.pdf", "rb").read(),
+)
+result = research_pipeline.invoke(state)
+
+print(result["domain"])          # e.g. "Computer Vision"
+print(result["report_path"])     # Supabase Storage path
+print(len(result["summaries"]))  # 4
+
+# arXiv path — provide metadata with arxiv_id
+from pipeline.models.paper import PaperMetadata
+state = make_initial_state(
+    paper_metadata=PaperMetadata(title="Attention Is All You Need", arxiv_id="1706.03762"),
+)
+result = research_pipeline.invoke(state)
+```

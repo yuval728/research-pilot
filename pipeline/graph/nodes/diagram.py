@@ -28,7 +28,7 @@ from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
 from pipeline.graph.state import PipelineState
-from pipeline.models.extraction import AiMlExtraction
+from pipeline.domains.ai_ml.schema import AiMlExtraction
 from pipeline.models.output import DiagramOutput, DiagramType
 from pipeline.models.run import StageStatus
 

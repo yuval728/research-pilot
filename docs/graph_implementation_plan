@@ -1,0 +1,189 @@
+# LangGraph Pipeline Graph Module
+
+Implement the complete `pipeline/graph/` module — the LangGraph orchestration layer that ties every prior module together. This is the heart of the pipeline: a compiled `StateGraph` where each processing stage is a node, the `PipelineState` TypedDict threads data through them, and conditional edges route execution depending on confidence thresholds, domain suitability, and errors.
+
+---
+
+## Proposed Changes
+
+### `graph/` — new top-level package
+
+#### [NEW] `graph/__init__.py`
+Exports `research_pipeline` (the compiled graph) and `PipelineState`.
+
+---
+
+### `graph/state.py`
+Defines `PipelineState` as a `TypedDict`. Fields map 1-to-1 to the spec:
+
+| Field | Type | Notes |
+|---|---|---|
+| `run_id` | `str` | UUID string of the pipeline run |
+| `paper_id` | `str \| None` | UUID string, set after ingest |
+| `pdf_storage_path` | `str \| None` | Supabase Storage path |
+| `pdf_bytes` | `bytes \| None` | In-memory PDF, fetched once and reused |
+| `paper_metadata` | `PaperMetadata \| None` | Bibliographic info |
+| `domain` | `str \| None` | e.g. `"Computer Vision"` |
+| `sub_domain` | `str \| None` | e.g. `"Object Detection"` |
+| `classification_confidence` | `float` | 0–1 |
+| `extraction` | `AiMlExtraction \| None` | Full structured extraction |
+| `summaries` | `list[SummaryOutput]` | One per level |
+| `diagrams` | `list[DiagramOutput]` | One per diagram type |
+| `code_output` | `CodeOutput \| None` | Generated code artefacts |
+| `report_path` | `str \| None` | Supabase Storage path to the report |
+| `stage_statuses` | `dict[str, StageStatus]` | Per-stage status enum |
+| `errors` | `list[str]` | Accumulated error messages |
+| `token_usage` | `dict[str, int]` | Tokens per stage |
+| `cached_stages` | `set[str]` | Stages served from cache |
+
+All fields carry `NotRequired` defaults so the state can be partially initialised via `make_initial_state()`.
+
+---
+
+### `graph/nodes/` — one file per stage
+
+Every node follows the same contract:
+```python
+def <name>_node(state: PipelineState) -> dict[str, Any]:
+```
+Nodes return a **partial state dict** (LangGraph merges it). They never mutate `state` in place.
+
+#### [NEW] `graph/nodes/ingest.py`
+- Accepts PDF bytes (`state["pdf_bytes"]`), arXiv URL, or DOI (from `state["paper_metadata"]`)
+- For arXiv: fetches PDF using `arxiv` package
+- For DOI: resolves via CrossRef `https://doi.org/` redirect using `httpx`
+- Computes SHA-256 content hash; checks DB for duplicates → raises `DuplicatePaperError`
+- Uploads raw PDF to Supabase Storage `papers` bucket via `supabase-py`
+- Creates `PaperORM` row in Postgres (via SQLAlchemy async session)
+- Updates state: `pdf_storage_path`, `paper_id`
+- Emits `STAGE_COMPLETED` on `default_bus`
+- On error: appends to `state["errors"]`, sets `stage_statuses["ingest"] = FAILED`
+
+#### [NEW] `graph/nodes/classify.py`
+- Cache check: query `extractions` table for existing classification for this paper + schema version
+- Fetches PDF bytes from Supabase Storage if not already in state
+- Renders `prompts/classify_v1.j2` Jinja2 template
+- Calls LiteLLM with Gemini vision model; parses JSON response into a `ClassificationResult` Pydantic model (domain, sub_domain, confidence)
+- Writes result to state; emits event
+
+#### [NEW] `graph/nodes/extract.py`
+- Cache check: if extraction exists in DB for same paper + schema version, load and mark cached
+- Renders `prompts/extract_v1.j2` with domain & sub_domain context
+- Sends PDF bytes + rendered prompt to Gemini via LiteLLM + Instructor
+- Instructor validates response against `AiMlExtraction` schema; auto-retries on failure
+- Stores validated extraction in `extractions` DB table as JSONB
+- Tracks tokens via `TelemetryCollector`; updates `token_usage`
+
+#### [NEW] `graph/nodes/summarise.py`
+- Works entirely from `state["extraction"]` (no PDF needed)
+- Renders `prompts/summarise_v1.j2` with extraction JSON
+- Makes 4 separate LiteLLM calls (one per `SummaryLevel`)
+- Stores `SummaryOutput` records into `outputs` table
+- Updates `state["summaries"]`
+
+#### [NEW] `graph/nodes/embed.py`
+- Works from `state["extraction"]`
+- Prepares 4 embedding chunks: title+abstract, key contributions, proposed method, results
+- Calls `litellm.embedding()` with `gemini/text-embedding-004` for each chunk
+- Stores 768-d vectors in `embeddings` table via pgvector (`EmbeddingORM`)
+- Updates state with confirmation key
+
+#### [NEW] `graph/nodes/diagram.py`
+- Works from `state["extraction"]`
+- Renders `prompts/diagram_v1.j2` with architecture + flow descriptions
+- Makes 3 LiteLLM calls (ARCHITECTURE, TRAINING_FLOW, INFERENCE_FLOW)
+- Validates Mermaid syntax via subprocess (`mmdc --input` or regex guard)
+- On invalid syntax: retries with error feedback (up to `max_retries`)
+- Uploads SVG files to Supabase Storage `outputs` bucket
+- Stores `DiagramOutput` records; updates `state["diagrams"]`
+
+#### [NEW] `graph/nodes/codegen.py`
+- Works from `state["extraction"]`
+- Renders `prompts/codegen_v1.j2` with architecture, training procedure, dataset descriptions
+- Sends to Gemini via LiteLLM; returns PyTorch implementation skeleton
+- Validates with `ast.parse()` — retries with syntax error feedback on failure
+- Exports `.py` file and Jupyter notebook via `nbformat`
+- Uploads both to Supabase Storage; stores `CodeOutput`; updates state
+
+#### [NEW] `graph/nodes/report.py`
+- Works from full state (summaries, diagrams, code, extraction, paper_metadata)
+- Assembles structured Markdown report (paper metadata, paragraph summary, key contributions, embedded SVG diagrams, section-by-section summary, implementation notes, code snippet, extraction JSON)
+- Uploads Markdown to Supabase Storage
+- Stores `ReportOutput`; updates `state["report_path"]`
+- Emits `RUN_COMPLETED` on `default_bus`
+
+---
+
+### `graph/edges.py`
+
+Pure functions taking `state: PipelineState` and returning the next node name as a `str`.
+
+| Function | Logic |
+|---|---|
+| `should_continue_after_classify` | If `classification_confidence < 0.5` → `"__end__"` with low-confidence error |
+| `should_run_codegen` | Checks `sub_domain` against a `THEORY_ONLY_DOMAINS` set; returns `"codegen"` or `"report"` |
+| `route_on_error` | If `errors` list is non-empty for a critical stage → `"__end__"`; otherwise next node |
+
+---
+
+### `graph/pipeline.py`
+
+Assembles and compiles the `StateGraph`:
+
+```
+START → ingest → classify --[conditional]--> extract
+                                              ├──> summarise ──┐
+                                              ├──> embed       ├──> report → END
+                                              ├──> diagram     │
+                                              └──> codegen ────┘
+                              (codegen conditional: may skip to report)
+```
+
+> [!IMPORTANT]
+> LangGraph doesn't natively support true fan-out/fan-in in the basic `StateGraph`. The implementation will use sequential chaining for the parallel-looking stages (summarise → embed → diagram → codegen → report), since the spec's "parallel" description is a conceptual grouping, not a requirement for concurrent execution. This is the correct approach for a synchronous pipeline. If async parallelism is desired, that can be a future enhancement using `Send()` API.
+
+Exports:
+```python
+research_pipeline: CompiledGraph  # the compiled LangGraph
+```
+
+---
+
+### `graph/nodes/__init__.py`
+Exports all 8 node functions.
+
+---
+
+## Prompt Templates
+
+The nodes reference Jinja2 template files at `pipeline/prompts/`. These need to exist as stub files so imports work and things can be tested before the full prompt engineering pass.
+
+New stub files:
+- `prompts/classify_v1.j2`
+- `prompts/extract_v1.j2`
+- `prompts/summarise_v1.j2`
+- `prompts/diagram_v1.j2`
+- `prompts/codegen_v1.j2`
+
+---
+
+## Open Questions
+
+> [!IMPORTANT]
+> **Parallelism**: The spec says "parallel edges from extract to summarise, embed, diagram, codegen." Pure LangGraph `StateGraph` can model this with `Send()` or by simply chaining the nodes sequentially (summarise → embed → diagram → codegen → report). Since the pipeline is not async-concurrent today and state merging with fan-in requires extra plumbing, I propose the sequential layout. Should I implement true concurrent fan-out using LangGraph's `Send()` API, or is sequential fine?
+
+> [!IMPORTANT]
+> **Supabase / DB calls in nodes**: The nodes as designed will need a live Supabase client and an async SQLAlchemy session. For now, nodes will import `db.session.get_async_session` and `supabase-py`. Should I add `supabase` (Python client) to `pyproject.toml` dependencies, or is that already managed elsewhere?
+
+> [!NOTE]
+> **Prompts directory**: Jinja2 prompt templates are referenced but not yet in the repo. I'll create stubs in `pipeline/prompts/` with placeholder content so the graph can be imported and tested structurally without a live LLM.
+
+## Verification Plan
+
+### Automated Tests
+- `uv run pytest pipeline/tests/unit/test_graph_state.py` — validate `PipelineState` construction and `make_initial_state()`
+- `uv run pytest pipeline/tests/unit/test_graph_edges.py` — validate all edge routing functions against mock states
+- `uv run python -c "from pipeline.graph.pipeline import research_pipeline; print(research_pipeline.get_graph())"` — smoke-test that compiled graph imports cleanly
+
+### Manual Verification
+- Inspect the compiled graph topology using `research_pipeline.get_graph().draw_mermaid()` to confirm the node/edge structure matches the spec

@@ -19,11 +19,7 @@ from pipeline.models.run import (
     StageStatus,
 )
 from pipeline.models.extraction import (
-    AiMlExtraction,
-    ArchitectureComponent,
-    DatasetInfo,
     ExtractionResult,
-    MetricResult,
 )
 from pipeline.models.output import (
     CodeOutput,
@@ -47,11 +43,7 @@ __all__ = [
     "StageResult",
     "StageStatus",
     # extraction
-    "AiMlExtraction",
-    "ArchitectureComponent",
-    "DatasetInfo",
     "ExtractionResult",
-    "MetricResult",
     # output
     "CodeOutput",
     "DiagramOutput",

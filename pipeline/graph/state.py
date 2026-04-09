@@ -19,7 +19,7 @@ from typing import Any
 
 from typing_extensions import NotRequired, TypedDict
 
-from pipeline.models.extraction import AiMlExtraction
+from pipeline.domains.ai_ml.schema import AiMlExtraction
 from pipeline.models.output import CodeOutput, DiagramOutput, SummaryOutput
 from pipeline.models.paper import PaperMetadata
 from pipeline.models.run import StageStatus
