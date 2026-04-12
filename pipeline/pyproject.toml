@@ -35,6 +35,12 @@ dependencies = [
     "nbformat>=5.10.0",
     # Supabase Storage / DB client
     "supabase>=2.0.0",
+    # API layer
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.9",
+    "sentry-sdk[fastapi]>=2.0.0",
+    "PyJWT>=2.8.0",
 ]
 
 [dependency-groups]
