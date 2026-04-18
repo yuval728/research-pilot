@@ -29,6 +29,8 @@ import yaml
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_ENV_FILES = (".env", "../.env", "../../.env")
+
 
 # ---------------------------------------------------------------------------
 # Nested settings groups
@@ -38,7 +40,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class GeminiSettings(BaseSettings):
     """Settings for Gemini model access via LiteLLM."""
 
-    model_config = SettingsConfigDict(env_prefix="GEMINI_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="GEMINI_",
+        env_file=_ENV_FILES,
+        extra="ignore",
+    )
 
     # Model names used by each stage (override in config.yaml or env)
     default_model: str = Field(
@@ -69,7 +75,11 @@ class GeminiSettings(BaseSettings):
 class SupabaseSettings(BaseSettings):
     """Settings for Supabase (database + storage + auth)."""
 
-    model_config = SettingsConfigDict(env_prefix="SUPABASE_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="SUPABASE_",
+        env_file=_ENV_FILES,
+        extra="ignore",
+    )
 
     url: str = Field(default=..., description="Supabase project URL.")
     db_url: SecretStr = Field(default=..., description="PostgreSQL connection string.")
@@ -86,7 +96,11 @@ class SupabaseSettings(BaseSettings):
 class LangfuseSettings(BaseSettings):
     """Settings for Langfuse LLM observability."""
 
-    model_config = SettingsConfigDict(env_prefix="LANGFUSE_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="LANGFUSE_",
+        env_file=_ENV_FILES,
+        extra="ignore",
+    )
 
     public_key: SecretStr = Field(default=..., description="Langfuse public key.")
     secret_key: SecretStr = Field(default=..., description="Langfuse secret key.")
@@ -103,7 +117,11 @@ class LangfuseSettings(BaseSettings):
 class PipelineSettings(BaseSettings):
     """Settings that control pipeline execution behaviour."""
 
-    model_config = SettingsConfigDict(env_prefix="PIPELINE_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="PIPELINE_",
+        env_file=_ENV_FILES,
+        extra="ignore",
+    )
 
     # Stages to run — empty list means all stages
     enabled_stages: list[str] = Field(
@@ -133,7 +151,7 @@ class AppSettings(BaseSettings):
     """Top-level application settings that compose all nested groups."""
 
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env"),
+        env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         env_nested_delimiter="__",
         extra="ignore",
