@@ -20,13 +20,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from pipeline.models.extraction import (
+from pipeline.domains.ai_ml.schema import (
     AiMlExtraction,
     ArchitectureComponent,
     DatasetInfo,
-    ExtractionResult,
     MetricResult,
 )
+from pipeline.models.extraction import ExtractionResult
 from pipeline.models.output import (
     CodeOutput,
     DiagramOutput,
@@ -368,7 +368,7 @@ class TestExtractionResult:
     def _make(self) -> ExtractionResult:
         return ExtractionResult(
             paper_id=uuid.uuid4(),
-            extraction=AiMlExtraction(task="NMT"),
+            extraction=AiMlExtraction(task="NMT").model_dump(),
         )
 
     def test_schema_version_default(self):

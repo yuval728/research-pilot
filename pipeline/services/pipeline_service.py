@@ -100,7 +100,7 @@ class PipelineService:
             # We must create a new session or be aware that db session lifetime might end.
             # In a robust system, the graph nodes would manage their own DB sessions.
             try:
-                await research_pipeline.ainvoke(initial_state)
+                await research_pipeline.ainvoke(initial_state)  # type: ignore[arg-type]
             except Exception:
                 # Basic top level catcher if it fails completely
                 # Graph usually catches in its nodes, but this ensures no silent deadlocks

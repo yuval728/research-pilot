@@ -50,7 +50,7 @@ class PaperService:
         return Paper(
             id=orm.id,
             source=PaperSource(orm.source),
-            source_url=orm.source_url,
+            source_url=orm.source_url,  # type: ignore[arg-type]
             pdf_storage_path=orm.pdf_storage_path,
             metadata=PaperMetadata(**orm.metadata_) if orm.metadata_ else None,
             created_at=orm.created_at.replace(tzinfo=timezone.utc),
