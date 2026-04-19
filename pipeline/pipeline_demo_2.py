@@ -420,4 +420,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        # Psycopg 3 + SQLAlchemy async requires SelectorEventLoop on Windows
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     asyncio.run(main())

@@ -17,6 +17,7 @@ Responsibilities
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import tempfile
@@ -24,11 +25,21 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import litellm  # type: ignore[import-untyped]
+from jinja2 import Environment, FileSystemLoader
+from pydantic import BaseModel, Field
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from supabase import create_client  # type: ignore[import-untyped]
+
+from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
-from pipeline.graph.state import PipelineState
+from pipeline.core.utils import extract_json
+from pipeline.db.models import OutputORM
 from pipeline.domains.ai_ml.schema import AiMlExtraction
+from pipeline.graph.state import PipelineState
 from pipeline.models.output import DiagramOutput, DiagramType
 from pipeline.models.run import StageStatus
 
@@ -40,21 +51,23 @@ log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Response schema
+# ---------------------------------------------------------------------------
+
+
+class DiagramResponse(BaseModel):
+    """Structured response for a Mermaid diagram."""
+
+    dsl: str = Field(..., description="The Mermaid DSL code for the diagram.")
+
+
+# ---------------------------------------------------------------------------
 # Mermaid validation
 # ---------------------------------------------------------------------------
 
 
 def _validate_mermaid(dsl: str) -> tuple[bool, str]:
-    """Validate Mermaid DSL syntax.
-
-    Attempts subprocess validation via ``mmdc`` (Mermaid CLI) if installed.
-    Falls back to a lightweight regex guard.
-
-    Returns
-    -------
-    (is_valid, error_message)
-    """
-    # Lightweight structural check: must start with a diagram type keyword
+    """Validate Mermaid DSL syntax."""
     stripped = dsl.strip()
     valid_starts = (
         "graph ",
@@ -75,12 +88,10 @@ def _validate_mermaid(dsl: str) -> tuple[bool, str]:
             f"DSL does not start with a recognised Mermaid keyword. Got: {stripped[:60]!r}",
         )
 
-    # Check for unclosed brackets / parentheses (common LLM error)
     open_count = stripped.count("[") - stripped.count("]")
     if open_count != 0:
         return False, f"Mismatched square brackets (delta={open_count})."
 
-    # Try mmdc subprocess validation if available
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".mmd", delete=False, encoding="utf-8"
@@ -88,7 +99,7 @@ def _validate_mermaid(dsl: str) -> tuple[bool, str]:
             f.write(stripped)
             tmp_path = f.name
 
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             ["mmdc", "-i", tmp_path, "-o", "/dev/null"],
             capture_output=True,
             text=True,
@@ -99,7 +110,6 @@ def _validate_mermaid(dsl: str) -> tuple[bool, str]:
         if result.returncode != 0:
             return False, result.stderr.strip() or "mmdc validation failed."
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        # mmdc not installed or timed out — regex check was sufficient
         pass
 
     return True, ""
@@ -115,8 +125,6 @@ def _render_prompt(
     diagram_type: DiagramType,
 ) -> str:
     """Render diagram_v1.j2 for the given diagram type."""
-    from jinja2 import Environment, FileSystemLoader
-
     env = Environment(
         loader=FileSystemLoader(str(_PROMPT_PATH.parent)),
         autoescape=False,
@@ -140,10 +148,6 @@ def _call_gemini_diagram(
     max_retries: int = 3,
 ) -> str:
     """Call Gemini to generate Mermaid DSL, with retry on syntax failure."""
-    import litellm  # type: ignore[import-untyped]
-
-    from pipeline.core.config import get_settings
-
     settings = get_settings()
     model = settings.gemini.default_model
 
@@ -156,21 +160,31 @@ def _call_gemini_diagram(
             response = litellm.completion(
                 model=model,
                 messages=messages,
-                temperature=0.1,  # Low temperature for deterministic DSL
+                temperature=settings.gemini.temperature,
                 max_tokens=1024,
+                num_retries=3,
+                response_format=DiagramResponse,  # Force JSON mode
                 api_key=settings.gemini.api_key.get_secret_value(),
             )
             ctx.set_response(response)
 
         raw = (response.choices[0].message.content or "").strip()
 
-        # Strip markdown fences if the model wraps in ```mermaid ... ```
-        if raw.startswith("```"):
-            raw = re.sub(r"^```[a-z]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw)
-            raw = raw.strip()
+        try:
+            cleaned = extract_json(raw)
+            data = json.loads(cleaned)
+            validated = DiagramResponse.model_validate(data)
+            dsl = validated.dsl.strip()
+        except Exception as exc:
+            log.warning("diagram_node.parse_failed", error=str(exc), raw=raw)
+            dsl = raw
 
-        is_valid, error_msg = _validate_mermaid(raw)
+        if dsl.startswith("```"):
+            dsl = re.sub(r"^```[a-z]*\n?", "", dsl)
+            dsl = re.sub(r"\n?```$", "", dsl)
+            dsl = dsl.strip()
+
+        is_valid, error_msg = _validate_mermaid(dsl)
 
         if is_valid:
             log.info(
@@ -213,10 +227,7 @@ def _call_gemini_diagram(
 
 
 def _upload_svg(paper_id: str, diagram_type: DiagramType, dsl: str) -> str | None:
-    """Render Mermaid DSL to SVG via mmdc and upload to Supabase Storage.
-
-    Returns the storage path, or ``None`` if rendering/upload fails.
-    """
+    """Render Mermaid DSL to SVG via mmdc and upload to Supabase Storage."""
     try:
         with (
             tempfile.NamedTemporaryFile(
@@ -230,7 +241,7 @@ def _upload_svg(paper_id: str, diagram_type: DiagramType, dsl: str) -> str | Non
             in_path = in_f.name
             out_path = out_f.name
 
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             ["mmdc", "-i", in_path, "-o", out_path],
             capture_output=True,
             timeout=30,
@@ -244,10 +255,6 @@ def _upload_svg(paper_id: str, diagram_type: DiagramType, dsl: str) -> str | Non
 
         svg_bytes = Path(out_path).read_bytes()
         Path(out_path).unlink(missing_ok=True)
-
-        # Upload to Supabase Storage
-        from pipeline.core.config import get_settings
-        from supabase import create_client  # type: ignore[import-untyped]
 
         settings = get_settings()
         client = create_client(
@@ -276,12 +283,6 @@ def _upload_svg(paper_id: str, diagram_type: DiagramType, dsl: str) -> str | Non
 def _store_diagram(paper_id: str, diagram: DiagramOutput) -> None:
     """Persist DiagramOutput record to the ``outputs`` table."""
     try:
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import Session
-
-        from pipeline.core.config import get_settings
-        from pipeline.db.models import OutputORM
-
         settings = get_settings()
         engine = create_engine(
             settings.supabase.db_url.get_secret_value(), pool_pre_ping=True

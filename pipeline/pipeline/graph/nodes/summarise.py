@@ -15,15 +15,25 @@ Responsibilities
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any
 
+import litellm  # type: ignore[import-untyped]
+from jinja2 import Environment, FileSystemLoader
+from pydantic import BaseModel, Field
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
-from pipeline.graph.state import PipelineState
+from pipeline.core.utils import extract_json
+from pipeline.db.models import OutputORM
 from pipeline.domains.ai_ml.schema import AiMlExtraction
+from pipeline.graph.state import PipelineState
 from pipeline.models.output import SummaryLevel, SummaryOutput
 from pipeline.models.run import StageStatus
 
@@ -34,16 +44,23 @@ log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Response schema
+# ---------------------------------------------------------------------------
+
+
+class SummaryResponse(BaseModel):
+    """Structured response for a paper summary."""
+
+    summary: str = Field(..., description="The generated summary text.")
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 
 def _render_prompt(extraction: AiMlExtraction, level: SummaryLevel) -> str:
     """Render summarise_v1.j2 with the extraction data and requested level."""
-    import json
-
-    from jinja2 import Environment, FileSystemLoader
-
     env = Environment(
         loader=FileSystemLoader(str(_PROMPT_PATH.parent)),
         autoescape=False,
@@ -62,10 +79,6 @@ def _call_gemini_summarise(
     collector: TelemetryCollector,
 ) -> str:
     """Call Gemini for one summary level, return the summary text."""
-    import litellm  # type: ignore[import-untyped]
-
-    from pipeline.core.config import get_settings
-
     settings = get_settings()
     model = settings.gemini.default_model
 
@@ -79,22 +92,27 @@ def _call_gemini_summarise(
             messages=messages,
             temperature=settings.gemini.temperature,
             max_tokens=2048,
+            num_retries=3,
+            response_format=SummaryResponse,  # Force JSON mode
             api_key=settings.gemini.api_key.get_secret_value(),
         )
         ctx.set_response(response)
 
-    return (response.choices[0].message.content or "").strip()
+    raw = (response.choices[0].message.content or "").strip()
+
+    try:
+        cleaned = extract_json(raw)
+        data = json.loads(cleaned)
+        validated = SummaryResponse.model_validate(data)
+        return validated.summary
+    except Exception as exc:
+        log.warning("summarise_node.parse_failed", error=str(exc), raw=raw)
+        return raw.strip()
 
 
 def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> None:
     """Persist all SummaryOutput records to the ``outputs`` table."""
     try:
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import Session
-
-        from pipeline.core.config import get_settings
-        from pipeline.db.models import OutputORM
-
         settings = get_settings()
         engine = create_engine(
             settings.supabase.db_url.get_secret_value(), pool_pre_ping=True

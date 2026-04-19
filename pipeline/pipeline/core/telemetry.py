@@ -164,17 +164,15 @@ class TelemetryCollector:
             if not lf:
                 return
 
-            lf.generation(  # type: ignore[attr-defined]
+            # Langfuse v3/v4 migration: generation() was removed from the top-level client.
+            # We use create_event() for manual tracking of point-in-time observations.
+            lf.create_event(
                 trace_id=record.run_id,
                 name=f"{record.stage_name}.llm_call",
-                model=record.model,
-                usage={
-                    "input": record.input_tokens,
-                    "output": record.output_tokens,
-                    "total": record.total_tokens,
-                    "unit": "TOKENS",
-                },
+                input=record.input_tokens,
+                output=record.output_tokens,
                 metadata={
+                    "model": record.model,
                     "stage": record.stage_name,
                     "latency_ms": record.latency_ms,
                     "cost_usd": record.cost_usd,

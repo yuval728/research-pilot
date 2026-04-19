@@ -235,6 +235,7 @@ class Scenario:
     description: str
     arxiv_url: str | None = None
     paper_metadata: PaperMetadata | None = None  # used when no arxiv_url
+    pdf_bytes: bytes | None = None  # pre-supplied PDF (e.g. stub for Branch C)
     expected_branch: str = "full"  # full | theory | early_exit
 
 
@@ -299,6 +300,7 @@ async def run_scenario(scenario: Scenario) -> PipelineState:
         initial_state = make_initial_state(
             run_id=run_id,
             paper_metadata=paper.metadata,
+            pdf_bytes=scenario.pdf_bytes,  # None for arXiv scenarios; stub for Branch C
             extra={
                 "paper_id": str(paper.id),
                 "pdf_storage_path": paper.pdf_storage_path,
@@ -333,45 +335,52 @@ SCENARIOS: list[Scenario] = [
         arxiv_url="https://arxiv.org/abs/1706.03762",  # Attention Is All You Need
         expected_branch="full",
     ),
-    # ── Branch B: Theory domain → codegen skipped ──────────────────────────
-    Scenario(
-        label="Branch B — Theory Domain (codegen skipped)",
-        description=(
-            "Statistical learning theory paper. should_run_codegen() detects "
-            "a theory sub-domain and routes diagram → report, skipping codegen."
-        ),
-        arxiv_url="https://arxiv.org/abs/1301.3666",  # A Few Useful Things to Know About ML
-        expected_branch="theory",
-    ),
-    # ── Branch C: Low-confidence early exit ─────────────────────────────────
-    Scenario(
-        label="Branch C — Low-Confidence Early Exit",
-        description=(
-            "A vague, interdisciplinary abstract that intentionally resists "
-            "classification. should_continue_after_classify() fires __end__ "
-            "when confidence < 0.5."
-        ),
-        paper_metadata=PaperMetadata(
-            title="On the Nature of Information in Complex Adaptive Systems: "
-            "A Philosophical and Interdisciplinary Overview",
-            authors=["J. Doe", "A. Smith"],
-            abstract=(
-                "This speculative position paper explores loose connections between "
-                "thermodynamic entropy, consciousness studies, economic market dynamics, "
-                "literary criticism, and music theory. No formal model is presented. "
-                "The work is intentionally broad and non-committal. "
-                "No specific algorithm, dataset, or benchmark is discussed."
-            ),
-            year=2024,
-            arxiv_id=None,
-            doi=None,
-            venue=None,
-            page_count=6,
-            domain=None,
-            sub_domain=None,
-        ),
-        expected_branch="early_exit",
-    ),
+    # # ── Branch B: Theory domain → codegen skipped ──────────────────────────
+    # Scenario(
+    #     label="Branch B — Theory Domain (codegen skipped)",
+    #     description=(
+    #         "Statistical learning theory paper. should_run_codegen() detects "
+    #         "a theory sub-domain and routes diagram → report, skipping codegen."
+    #     ),
+    #     arxiv_url="https://arxiv.org/abs/1301.3666",  # A Few Useful Things to Know About ML
+    #     expected_branch="theory",
+    # ),
+    # # ── Branch C: Low-confidence early exit ─────────────────────────────────
+    # Scenario(
+    #     label="Branch C — Low-Confidence Early Exit",
+    #     description=(
+    #         "A vague, interdisciplinary abstract that intentionally resists "
+    #         "classification. should_continue_after_classify() fires __end__ "
+    #         "when confidence < 0.5."
+    #     ),
+    #     paper_metadata=PaperMetadata(
+    #         title="On the Nature of Information in Complex Adaptive Systems: "
+    #         "A Philosophical and Interdisciplinary Overview",
+    #         authors=["J. Doe", "A. Smith"],
+    #         abstract=(
+    #             "This speculative position paper explores loose connections between "
+    #             "thermodynamic entropy, consciousness studies, economic market dynamics, "
+    #             "literary criticism, and music theory. No formal model is presented. "
+    #             "The work is intentionally broad and non-committal. "
+    #             "No specific algorithm, dataset, or benchmark is discussed."
+    #         ),
+    #         year=2024,
+    #         arxiv_id=None,
+    #         doi=None,
+    #         venue=None,
+    #         page_count=6,
+    #         domain=None,
+    #         sub_domain=None,
+    #     ),
+    #     # Minimal valid PDF stub so ingest_node can proceed to classify.
+    #     # The early-exit fires at classify (low confidence), not at ingest.
+    #     pdf_bytes=b"%PDF-1.0\n1 0 obj<</Type /Catalog /Pages 2 0 R>>endobj "
+    #     b"2 0 obj<</Type /Pages /Kids [3 0 R] /Count 1>>endobj "
+    #     b"3 0 obj<</Type /Page /MediaBox [0 0 3 3]>>endobj\n"
+    #     b"xref\n0 4\n0000000000 65535 f\n"
+    #     b"trailer<</Size 4 /Root 1 0 R>>\nstartxref\n0\n%%EOF",
+    #     expected_branch="early_exit",
+    # ),
 ]
 
 
@@ -431,4 +440,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        # Psycopg 3 + SQLAlchemy async requires SelectorEventLoop on Windows
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     asyncio.run(main())

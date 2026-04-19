@@ -24,11 +24,19 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import instructor  # type: ignore[import-untyped]
+import litellm  # type: ignore[import-untyped]
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+from jinja2 import Environment, FileSystemLoader
+
+from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
 from pipeline.graph.state import PipelineState
 from pipeline.domains.ai_ml.schema import AiMlExtraction
+from pipeline.db.models import ExtractionORM
 from pipeline.models.run import StageStatus
 
 _STAGE = "extract"
@@ -45,8 +53,6 @@ log = get_logger(__name__)
 
 def _render_prompt(domain: str | None, sub_domain: str | None) -> str:
     """Render the extract_v1.j2 template with domain context."""
-    from jinja2 import Environment, FileSystemLoader
-
     env = Environment(
         loader=FileSystemLoader(str(_PROMPT_PATH.parent)),
         autoescape=False,
@@ -61,10 +67,6 @@ def _render_prompt(domain: str | None, sub_domain: str | None) -> str:
 def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
     """Return a cached ``AiMlExtraction`` if one exists in the DB."""
     try:
-        from sqlalchemy import create_engine, text
-
-        from pipeline.core.config import get_settings
-
         settings = get_settings()
         engine = create_engine(
             settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
@@ -98,11 +100,6 @@ def _call_gemini_extract(
     collector: TelemetryCollector,
 ) -> AiMlExtraction:
     """Call Gemini via LiteLLM + Instructor, returning a validated extraction."""
-    import instructor  # type: ignore[import-untyped]
-    import litellm  # type: ignore[import-untyped]
-
-    from pipeline.core.config import get_settings
-
     settings = get_settings()
     model = settings.gemini.vision_model
 
@@ -147,12 +144,6 @@ def _store_extraction(
 ) -> None:
     """Persist the extraction JSONB to the ``extractions`` table."""
     try:
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import Session
-
-        from pipeline.core.config import get_settings
-        from pipeline.db.models import ExtractionORM
-
         settings = get_settings()
         engine = create_engine(
             settings.supabase.db_url.get_secret_value(), pool_pre_ping=True

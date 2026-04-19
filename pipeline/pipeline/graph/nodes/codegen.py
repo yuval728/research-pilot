@@ -19,13 +19,26 @@ Responsibilities
 from __future__ import annotations
 
 import ast
+import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any
 
+import nbformat  # type: ignore[import-untyped]
+import litellm  # type: ignore[import-untyped]
+from pydantic import BaseModel, Field
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from jinja2 import Environment, FileSystemLoader
+from supabase import create_client  # type: ignore[import-untyped]
+
+from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
+from pipeline.core.utils import extract_json
+from pipeline.db.models import OutputORM
 from pipeline.graph.state import PipelineState
 from pipeline.domains.ai_ml.schema import AiMlExtraction
 from pipeline.models.output import CodeOutput
@@ -39,14 +52,42 @@ log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Response schema
+# ---------------------------------------------------------------------------
+
+
+class CodegenResponse(BaseModel):
+    """Structured response for generated Python code."""
+
+    python_code: str = Field(
+        ..., description="The complete Python code for implementing the model."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Python validation
+# ---------------------------------------------------------------------------
+
+
+def _validate_python(code: str) -> tuple[bool, str]:
+    """Basic structural validation of generated Python code."""
+    if not code.strip():
+        return False, "Empty code generated."
+
+    try:
+        ast.parse(code)
+        return True, ""
+    except SyntaxError as exc:
+        return False, f"SyntaxError at line {exc.lineno}: {exc.msg}"
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 
 def _render_prompt(extraction: AiMlExtraction) -> str:
     """Render codegen_v1.j2 with extraction data."""
-    from jinja2 import Environment, FileSystemLoader
-
     env = Environment(
         loader=FileSystemLoader(str(_PROMPT_PATH.parent)),
         autoescape=False,
@@ -64,31 +105,13 @@ def _render_prompt(extraction: AiMlExtraction) -> str:
     )
 
 
-def _validate_python(code: str) -> tuple[bool, str]:
-    """Validate Python source using the built-in AST parser.
-
-    Returns
-    -------
-    (is_valid, error_message)
-    """
-    try:
-        ast.parse(code)
-        return True, ""
-    except SyntaxError as exc:
-        return False, f"SyntaxError at line {exc.lineno}: {exc.msg}"
-
-
 def _call_gemini_codegen(
     prompt: str,
     run_id: str,
     collector: TelemetryCollector,
     max_retries: int = 3,
 ) -> str:
-    """Call Gemini to generate Python code, retrying on syntax errors."""
-    import litellm  # type: ignore[import-untyped]
-
-    from pipeline.core.config import get_settings
-
+    """Call Gemini to generate implementation code, with retry on syntax failure."""
     settings = get_settings()
     model = settings.gemini.default_model
 
@@ -99,27 +122,36 @@ def _call_gemini_codegen(
             response = litellm.completion(
                 model=model,
                 messages=messages,
-                temperature=0.2,
+                temperature=settings.gemini.temperature,
                 max_tokens=settings.gemini.max_output_tokens,
+                num_retries=3,
+                response_format=CodegenResponse,  # Force JSON mode
                 api_key=settings.gemini.api_key.get_secret_value(),
             )
             ctx.set_response(response)
 
         raw = (response.choices[0].message.content or "").strip()
 
-        # Strip markdown fences
-        if raw.startswith("```"):
-            import re
+        try:
+            cleaned = extract_json(raw)
+            data = json.loads(cleaned)
+            validated = CodegenResponse.model_validate(data)
+            code = validated.python_code.strip()
+        except Exception as exc:
+            log.warning("codegen_node.parse_failed", error=str(exc), raw=raw)
+            code = raw
 
-            raw = re.sub(r"^```[a-z]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw)
-            raw = raw.strip()
+        # Strip markdown fences if present
+        if code.startswith("```"):
+            code = re.sub(r"^```[a-z]*\n?", "", code)
+            code = re.sub(r"\n?```$", "", code)
+            code = code.strip()
 
-        is_valid, error_msg = _validate_python(raw)
+        is_valid, error_msg = _validate_python(code)
 
         if is_valid:
             log.info("codegen_node.code_valid", run_id=run_id, attempt=attempt)
-            return raw
+            return code
 
         log.warning(
             "codegen_node.code_invalid",
@@ -145,33 +177,33 @@ def _call_gemini_codegen(
     return raw  # Return best-effort code
 
 
-def _build_notebook(python_code: str, title: str) -> bytes:
-    """Convert Python source to a Jupyter notebook (.ipynb) as bytes."""
-    import nbformat  # type: ignore[import-untyped]
-
+def _build_notebook(python_code: str, paper_metadata: Any | None) -> bytes:
+    """Wrap Python source into a basic Jupyter Notebook structure (.ipynb)."""
     nb = nbformat.v4.new_notebook()
-    nb.metadata["kernelspec"] = {
-        "display_name": "Python 3",
-        "language": "python",
-        "name": "python3",
-    }
-    nb.metadata["language_info"] = {"name": "python", "version": "3.12.0"}
 
-    # Title cell
+    # Title & Metadata
+    title = "Research Implementation"
+    if paper_metadata:
+        if hasattr(paper_metadata, "title"):
+            title = getattr(paper_metadata, "title")
+        elif isinstance(paper_metadata, dict):
+            title = paper_metadata.get("title", title)
+
     nb.cells.append(
-        nbformat.v4.new_markdown_cell(f"# {title}\n\nAuto-generated by Research Pilot.")
+        nbformat.v4.new_markdown_cell(
+            f"# {title}\nGenerated by Research Pilot pipeline"
+        )
     )
 
-    # Split code into logical sections at class/function boundaries
+    # Parse and split code by top-level blocks for readability
     lines = python_code.splitlines(keepends=True)
     current_block: list[str] = []
-
     for line in lines:
-        if (
-            line.startswith(("class ", "def ", "# ----", "if __name__"))
-            and current_block
-        ):
-            nb.cells.append(nbformat.v4.new_code_cell("".join(current_block).strip()))
+        if line.startswith(("class ", "def ", "import ", "from ")):
+            if current_block:
+                nb.cells.append(
+                    nbformat.v4.new_code_cell("".join(current_block).strip())
+                )
             current_block = []
         current_block.append(line)
 
@@ -188,9 +220,6 @@ def _upload_artefacts(
 ) -> tuple[str | None, str | None]:
     """Upload .py and .ipynb to Supabase Storage, return (py_path, nb_path)."""
     try:
-        from pipeline.core.config import get_settings
-        from supabase import create_client  # type: ignore[import-untyped]
-
         settings = get_settings()
         client = create_client(
             settings.supabase.url,
@@ -221,12 +250,6 @@ def _upload_artefacts(
 def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
     """Persist CodeOutput record to the ``outputs`` table."""
     try:
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import Session
-
-        from pipeline.core.config import get_settings
-        from pipeline.db.models import OutputORM
-
         settings = get_settings()
         engine = create_engine(
             settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
@@ -283,8 +306,6 @@ def codegen_node(state: PipelineState) -> dict[str, Any]:
         return {"stage_statuses": stage_statuses, "errors": errors, "code_output": None}
 
     try:
-        from pipeline.core.config import get_settings
-
         settings = get_settings()
         collector = TelemetryCollector(run_id=run_id)
 
@@ -297,10 +318,7 @@ def codegen_node(state: PipelineState) -> dict[str, Any]:
         token_usage[_STAGE] = collector.total_tokens
 
         # ── 2. Build notebook ────────────────────────────────────────────
-        title = (
-            paper_metadata.title if paper_metadata else "Research Pilot Generated Model"
-        )
-        notebook_bytes = _build_notebook(python_code, title)
+        notebook_bytes = _build_notebook(python_code, paper_metadata)
 
         # ── 3. Upload artefacts ──────────────────────────────────────────
         py_path, nb_path = None, None

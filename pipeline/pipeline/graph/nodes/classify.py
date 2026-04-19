@@ -16,15 +16,20 @@ Responsibilities
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from typing import Any
 
+import litellm  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
+from supabase import create_client  # type: ignore[import-untyped]
 
+from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
+from pipeline.core.utils import extract_json
 from pipeline.graph.state import PipelineState
 from pipeline.models.run import StageStatus
 
@@ -60,9 +65,6 @@ def _load_prompt() -> str:
 
 def _fetch_pdf_bytes(storage_path: str) -> bytes:
     """Download PDF bytes from Supabase Storage."""
-    from pipeline.core.config import get_settings
-    from supabase import create_client  # type: ignore[import-untyped]
-
     settings = get_settings()
     client = create_client(
         settings.supabase.url,
@@ -79,12 +81,6 @@ def _call_gemini_classify(
     collector: TelemetryCollector,
 ) -> ClassificationResult:
     """Send the PDF + classify prompt to Gemini and parse the response."""
-    import base64
-
-    import litellm  # type: ignore[import-untyped]
-
-    from pipeline.core.config import get_settings
-
     settings = get_settings()
     model = settings.gemini.vision_model
 
@@ -113,20 +109,33 @@ def _call_gemini_classify(
             model=model,
             messages=messages,
             temperature=settings.gemini.temperature,
-            max_tokens=512,
+            max_tokens=1024,  # Increased to prevent truncation
+            num_retries=3,
+            response_format=ClassificationResult,  # Native JSON schema mode
             api_key=settings.gemini.api_key.get_secret_value(),
         )
         ctx.set_response(response)
 
     raw = response.choices[0].message.content or "{}"
 
-    # Strip possible markdown fences
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    # Even in JSON mode, LiteLLM/Gemini sometimes wraps in markdown or prose.
+    # We use a robust extractor before parsing.
+    cleaned = extract_json(raw)
 
-    data = json.loads(raw)
-    return ClassificationResult.model_validate(data)
+    try:
+        data = json.loads(cleaned)
+        return ClassificationResult.model_validate(data)
+    except (json.JSONDecodeError, ValueError) as exc:
+        log.error(
+            "classify_node.parse_failed", error=str(exc), raw=raw, cleaned=cleaned
+        )
+        # Fallback: if native mode failed, try to find ANY JSON in the raw response
+        try:
+            fallback_cleaned = extract_json(raw)
+            data = json.loads(fallback_cleaned)
+            return ClassificationResult.model_validate(data)
+        except Exception:
+            raise
 
 
 def _load_cached_classification(paper_id: str) -> ClassificationResult | None:

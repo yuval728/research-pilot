@@ -57,10 +57,7 @@ def _fetch_arxiv(arxiv_id: str) -> bytes:
         )
 
     paper = results[0]
-    # buf = io.BytesIO()
-    paper.download_pdf(dirpath=None, filename=None)  # type: ignore[call-arg]
-
-    # arxiv library writes to filesystem; use httpx to fetch directly instead
+    # arxiv library's download_pdf writes to disk; fetch the PDF directly instead
     pdf_url = paper.pdf_url
     return _fetch_url(pdf_url)
 
