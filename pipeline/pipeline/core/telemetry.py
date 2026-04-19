@@ -160,13 +160,9 @@ class TelemetryCollector:
             if not settings.langfuse.enabled:
                 return
 
-            from langfuse import Langfuse
-
-            lf = Langfuse(
-                public_key=settings.langfuse.public_key.get_secret_value(),
-                secret_key=settings.langfuse.secret_key.get_secret_value(),
-                host=settings.langfuse.host,
-            )
+            lf = _get_langfuse()
+            if not lf:
+                return
 
             lf.generation(  # type: ignore[attr-defined]
                 trace_id=record.run_id,
@@ -196,6 +192,38 @@ class TelemetryCollector:
                 stage=record.stage_name,
                 error=str(exc),
             )
+
+
+# ---------------------------------------------------------------------------
+
+_LANGFUSE_CLIENT: Any = None
+_LANGFUSE_INITED: bool = False
+
+
+def _get_langfuse() -> Any:
+    global _LANGFUSE_CLIENT, _LANGFUSE_INITED
+    if _LANGFUSE_INITED:
+        return _LANGFUSE_CLIENT
+
+    _LANGFUSE_INITED = True
+    try:
+        from pipeline.core.config import get_settings
+
+        settings = get_settings()
+
+        if not settings.langfuse.enabled:
+            return None
+
+        from langfuse import Langfuse
+
+        _LANGFUSE_CLIENT = Langfuse(
+            public_key=settings.langfuse.public_key.get_secret_value(),
+            secret_key=settings.langfuse.secret_key.get_secret_value(),
+            host=settings.langfuse.host,
+        )
+        return _LANGFUSE_CLIENT
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

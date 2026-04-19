@@ -119,8 +119,10 @@ def create_app() -> FastAPI:
 
     # Sentry — initialise before creating the app so the ASGI middleware
     # captures errors thrown during startup.
-    if settings.environment != "development":
-        sentry_dsn = getattr(settings, "sentry_dsn", None)
+    if settings.environment != "development" or settings.sentry_dsn:
+        sentry_dsn = (
+            settings.sentry_dsn.get_secret_value() if settings.sentry_dsn else None
+        )
         if sentry_dsn:
             sentry_sdk.init(
                 dsn=sentry_dsn,
@@ -142,7 +144,7 @@ def create_app() -> FastAPI:
     )
 
     # ---- Sentry ASGI middleware ----
-    if settings.environment != "development":
+    if sentry_dsn:
         app.add_middleware(SentryAsgiMiddleware)  # type: ignore[arg-type]
 
     # ---- CORS ----

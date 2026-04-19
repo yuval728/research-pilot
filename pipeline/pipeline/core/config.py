@@ -164,6 +164,7 @@ class AppSettings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO"
     )
+    sentry_dsn: SecretStr | None = Field(default=None)
 
     # Nested settings — each resolved independently from env
     gemini: GeminiSettings = Field(default_factory=GeminiSettings)
