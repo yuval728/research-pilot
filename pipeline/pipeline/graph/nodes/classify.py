@@ -109,7 +109,7 @@ def _call_gemini_classify(
             model=model,
             messages=messages,
             temperature=settings.gemini.temperature,
-            max_tokens=1024,  # Increased to prevent truncation
+            max_tokens=4096,  # Increased to prevent truncation
             num_retries=3,
             response_format=ClassificationResult,  # Native JSON schema mode
             api_key=settings.gemini.api_key.get_secret_value(),

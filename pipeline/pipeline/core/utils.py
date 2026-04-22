@@ -33,7 +33,17 @@ def extract_json(raw: str) -> str:
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
+        text = text[start : end + 1]
 
-    # Fallback: return as-is
+    # Post-processing: basic "repair" for common LLM JSON mistakes.
+    # LLMs (especially older or smaller ones) often use single quotes for keys/values.
+    # json.loads() requires double quotes.
+    # import re
+
+    # # Try to replace single quotes with double quotes for keys: 'key' -> "key"
+    # # and values: 'value' -> "value", but be careful with apostrophes in text.
+    # # This regex looks for single quotes that appear to be delimiters.
+    # text = re.sub(r"\'(\w+)\'\s*:", r'"\1":', text)  # keys
+    # text = re.sub(r":\s*\'(.*?)\'(\s*[,}])", r': "\1"\2', text)  # values (string)
+
     return text

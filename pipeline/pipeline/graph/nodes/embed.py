@@ -87,6 +87,7 @@ def _embed_chunks(
             model=model,
             input=[text],
             api_key=api_key,
+            dimensions=1536,
         )
         vector: list[float] = response.data[0]["embedding"]
         results.append((chunk_type, vector))

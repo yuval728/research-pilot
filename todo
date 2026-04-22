@@ -1,0 +1,17 @@
+# TODO:
+
+1. Fix the accuracy
+
+2. Check the caching mechanism properly
+
+3. Check if there is cross contamination between runs as i got mixed report of 2 papers
+
+4. Optimize the graph to run faster
+
+5. Fix langfuse integration. Add session, proper tracing
+
+6. Connect to UI properly
+
+7. Improve the performance
+
+8. Add more features?

@@ -156,8 +156,8 @@ class EmbeddingORM(Base):
     )
     chunk_type: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    # 768 dimensions for text-embedding-004 model
-    embedding: Mapped[Any] = mapped_column(Vector(768), nullable=False)
+    # 1536 dimensions for text-embedding-004 model
+    embedding: Mapped[Any] = mapped_column(Vector(1536), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow

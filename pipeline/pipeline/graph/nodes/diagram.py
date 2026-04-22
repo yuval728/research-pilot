@@ -161,7 +161,7 @@ def _call_gemini_diagram(
                 model=model,
                 messages=messages,
                 temperature=settings.gemini.temperature,
-                max_tokens=1024,
+                max_tokens=8192,
                 num_retries=3,
                 response_format=DiagramResponse,  # Force JSON mode
                 api_key=settings.gemini.api_key.get_secret_value(),
@@ -193,7 +193,7 @@ def _call_gemini_diagram(
                 diagram_type=diagram_type.value,
                 attempt=attempt,
             )
-            return raw
+            return dsl
 
         log.warning(
             "diagram_node.dsl_invalid",
@@ -223,7 +223,7 @@ def _call_gemini_diagram(
         run_id=run_id,
         diagram_type=diagram_type.value,
     )
-    return raw
+    return dsl
 
 
 def _upload_svg(paper_id: str, diagram_type: DiagramType, dsl: str) -> str | None:
@@ -345,6 +345,7 @@ def diagram_node(state: PipelineState) -> dict[str, Any]:
         diagrams: list[DiagramOutput] = []
 
         for diagram_type in DiagramType:
+            log.info("diagram_node.processing_type", type=diagram_type.value)
             prompt = _render_prompt(extraction, diagram_type)
             dsl = _call_gemini_diagram(
                 prompt,
@@ -356,6 +357,7 @@ def diagram_node(state: PipelineState) -> dict[str, Any]:
 
             svg_path: str | None = None
             if paper_id:
+                log.info("diagram_node.rendering_svg", type=diagram_type.value)
                 svg_path = _upload_svg(paper_id, diagram_type, dsl)
 
             diagram = DiagramOutput(
@@ -378,7 +380,6 @@ def diagram_node(state: PipelineState) -> dict[str, Any]:
             )
 
         token_usage[_STAGE] = collector.total_tokens
-
         stage_statuses[_STAGE] = StageStatus.COMPLETED
         default_bus.emit(
             Event(
@@ -389,11 +390,7 @@ def diagram_node(state: PipelineState) -> dict[str, Any]:
             )
         )
 
-        log.info(
-            "diagram_node.completed",
-            run_id=run_id,
-            count=len(diagrams),
-        )
+        log.info("diagram_node.completed", run_id=run_id, count=len(diagrams))
 
         return {
             "diagrams": diagrams,
@@ -403,6 +400,7 @@ def diagram_node(state: PipelineState) -> dict[str, Any]:
         }
 
     except Exception as exc:  # noqa: BLE001
+        log.exception("diagram_node.failed", run_id=run_id, error=str(exc))
         msg = f"[{_STAGE}] {exc}"
         errors.append(msg)
         stage_statuses[_STAGE] = StageStatus.FAILED

@@ -164,11 +164,11 @@ class TelemetryCollector:
             if not lf:
                 return
 
-            # Langfuse v3/v4 migration: generation() was removed from the top-level client.
-            # We use create_event() for manual tracking of point-in-time observations.
+            # Langfuse v4 migration: create_event uses trace_context for linking.
             lf.create_event(
-                trace_id=record.run_id,
                 name=f"{record.stage_name}.llm_call",
+                # Langfuse v4 requires trace IDs to be 32-character hex strings (no hyphens).
+                trace_context={"trace_id": record.run_id.replace("-", "")},
                 input=record.input_tokens,
                 output=record.output_tokens,
                 metadata={
@@ -178,7 +178,6 @@ class TelemetryCollector:
                     "cost_usd": record.cost_usd,
                     "cached": record.cached,
                 },
-                start_time=record.timestamp,
             )
 
         except Exception as exc:  # noqa: BLE001

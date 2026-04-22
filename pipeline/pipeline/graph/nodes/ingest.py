@@ -225,6 +225,16 @@ def ingest_node(state: PipelineState) -> dict[str, Any]:
     try:
         # ── 1. Determine source and fetch PDF bytes ─────────────────────
         source = PaperSource.PDF_UPLOAD.value
+        storage_path = state.get("pdf_storage_path")
+
+        # # If we already have a storage path and no bytes, we can skip ingestion
+        # # as it was likely handled by a pre-processing service (like in the demo).
+        # if pdf_bytes is None and storage_path:
+        #     log.info("ingest_node.skipping_fetch", reason="already_in_storage", storage_path=storage_path)
+        #     stage_statuses[_STAGE] = StageStatus.COMPLETED
+        #     return {
+        #         "stage_statuses": stage_statuses,
+        #     }
 
         if pdf_bytes is None:
             if metadata and metadata.arxiv_id:
