@@ -37,3 +37,7 @@ pip-delete-this-directory.txt
 .python-version
 .uv/
 uv.lock
+
+.mypy_cache
+.pytest_cache
+.ruff_cache

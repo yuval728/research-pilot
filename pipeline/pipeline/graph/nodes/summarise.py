@@ -25,7 +25,6 @@ from jinja2 import Environment
 
 
 from pipeline.core.config import get_settings
-from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
 
@@ -115,6 +114,41 @@ async def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> Non
         log.warning("summarise_store_failed", reason=str(exc))
 
 
+async def _load_cached_summaries(paper_id: str) -> list[SummaryOutput]:
+    """Return cached ``SummaryOutput`` records if they exist in the DB."""
+    try:
+        from pipeline.db.session import get_db_context
+        from pipeline.db.models import OutputORM
+        from sqlalchemy import select
+        import uuid
+
+        async with get_db_context() as session:
+            stmt = (
+                select(OutputORM)
+                .where(OutputORM.paper_id == uuid.UUID(paper_id))
+                .where(OutputORM.output_type.startswith("summary_"))
+            )
+            res = await session.execute(stmt)
+            orms = res.scalars().all()
+
+            summaries: list[SummaryOutput] = []
+            for orm in orms:
+                level_str = orm.output_type.replace("summary_", "")
+                summaries.append(
+                    SummaryOutput(
+                        paper_id=uuid.UUID(paper_id),
+                        level=SummaryLevel(level_str),
+                        content="Summary content not available in DB (inline placeholder)"
+                        if orm.storage_path.startswith("inline:")
+                        else orm.storage_path,
+                    )
+                )
+            return summaries
+    except Exception as exc:  # noqa: BLE001
+        log.debug("summarise_cache_miss", reason=str(exc))
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Node function
 # ---------------------------------------------------------------------------
@@ -146,6 +180,35 @@ async def summarise_node(state: PipelineState) -> dict[str, Any]:
 
     log.info("summarise_node.started", run_id=run_id)
     stage_statuses[_STAGE] = StageStatus.RUNNING
+
+    cached_stages: set[str] = set(state.get("cached_stages", set()))
+
+    # ── 1. Cache check ───────────────────────────────────────────────────────
+    from pipeline.core.config import get_settings
+
+    settings = get_settings()
+
+    if settings.pipeline.cache_enabled and paper_id:
+        cached_summaries = await _load_cached_summaries(paper_id)
+        if cached_summaries:
+            log.info("summarise_node.cache_hit", run_id=run_id)
+            stage_statuses[_STAGE] = StageStatus.CACHED
+            cached_stages.add(_STAGE)
+            from pipeline.core.events import Event, EventType, default_bus
+
+            default_bus.emit(
+                Event(
+                    type=EventType.STAGE_COMPLETED,
+                    run_id=run_id,
+                    stage_name=_STAGE,
+                    payload={"cached": True},
+                )
+            )
+            return {
+                "summaries": cached_summaries,
+                "stage_statuses": stage_statuses,
+                "cached_stages": cached_stages,
+            }
 
     if extraction is None:
         msg = f"[{_STAGE}] extraction is None — skipping."

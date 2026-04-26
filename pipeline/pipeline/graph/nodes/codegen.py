@@ -34,7 +34,6 @@ from jinja2 import Environment
 from pipeline.db.engine import get_supabase_client
 
 from pipeline.core.config import get_settings
-from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
 from pipeline.core.utils import extract_json
@@ -275,6 +274,35 @@ async def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
         log.warning("codegen_store_failed", reason=str(exc))
 
 
+async def _load_cached_code(paper_id: str) -> CodeOutput | None:
+    """Return a cached ``CodeOutput`` if one exists in the DB."""
+    try:
+        from pipeline.db.session import get_db_context
+        from pipeline.db.models import OutputORM
+        from sqlalchemy import select
+        import uuid
+
+        async with get_db_context() as session:
+            stmt = (
+                select(OutputORM.storage_path)
+                .where(OutputORM.paper_id == uuid.UUID(paper_id))
+                .where(OutputORM.output_type == "codegen")
+                .limit(1)
+            )
+            res = await session.execute(stmt)
+            path = res.scalar_one_or_none()
+            if path:
+                return CodeOutput(
+                    paper_id=uuid.UUID(paper_id),
+                    python_path=path if not path.startswith("inline:") else None,
+                    notebook_path=None,
+                    synthetic_data_description=None,
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("codegen_cache_miss", reason=str(exc))
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Node function
 # ---------------------------------------------------------------------------
@@ -304,6 +332,35 @@ async def codegen_node(state: PipelineState) -> dict[str, Any]:
 
     log.info("codegen_node.started", run_id=run_id)
     stage_statuses[_STAGE] = StageStatus.RUNNING
+
+    cached_stages: set[str] = set(state.get("cached_stages", set()))
+
+    # ── 1. Cache check ───────────────────────────────────────────────────────
+    from pipeline.core.config import get_settings
+
+    settings = get_settings()
+
+    if settings.pipeline.cache_enabled and paper_id:
+        cached_code = await _load_cached_code(paper_id)
+        if cached_code:
+            log.info("codegen_node.cache_hit", run_id=run_id)
+            stage_statuses[_STAGE] = StageStatus.CACHED
+            cached_stages.add(_STAGE)
+            from pipeline.core.events import Event, EventType, default_bus
+
+            default_bus.emit(
+                Event(
+                    type=EventType.STAGE_COMPLETED,
+                    run_id=run_id,
+                    stage_name=_STAGE,
+                    payload={"cached": True},
+                )
+            )
+            return {
+                "code_output": cached_code,
+                "stage_statuses": stage_statuses,
+                "cached_stages": cached_stages,
+            }
 
     if extraction is None:
         msg = f"[{_STAGE}] extraction is None — skipping."

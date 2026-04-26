@@ -24,7 +24,6 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.graph.state import PipelineState
 from pipeline.domains.ai_ml.schema import AiMlExtraction
@@ -123,6 +122,27 @@ async def _store_embeddings(
         log.warning("embed_store_failed", reason=str(exc))
 
 
+async def _load_cached_embeddings(paper_id: str) -> bool:
+    """Return True if embeddings already exist for this paper."""
+    try:
+        from pipeline.db.session import get_db_context
+        from pipeline.db.models import EmbeddingORM
+        from sqlalchemy import select
+        import uuid
+
+        async with get_db_context() as session:
+            stmt = (
+                select(EmbeddingORM.id)
+                .where(EmbeddingORM.paper_id == uuid.UUID(paper_id))
+                .limit(1)
+            )
+            res = await session.execute(stmt)
+            return res.scalar_one_or_none() is not None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("embed_cache_miss", reason=str(exc))
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Node function
 # ---------------------------------------------------------------------------
@@ -151,6 +171,34 @@ async def embed_node(state: PipelineState) -> dict[str, Any]:
 
     log.info("embed_node.started", run_id=run_id)
     stage_statuses[_STAGE] = StageStatus.RUNNING
+
+    cached_stages: set[str] = set(state.get("cached_stages", set()))
+
+    # ── 1. Cache check ───────────────────────────────────────────────────────
+    from pipeline.core.config import get_settings
+
+    settings = get_settings()
+
+    if settings.pipeline.cache_enabled and paper_id:
+        is_cached = await _load_cached_embeddings(paper_id)
+        if is_cached:
+            log.info("embed_node.cache_hit", run_id=run_id)
+            stage_statuses[_STAGE] = StageStatus.CACHED
+            cached_stages.add(_STAGE)
+            from pipeline.core.events import Event, EventType, default_bus
+
+            default_bus.emit(
+                Event(
+                    type=EventType.STAGE_COMPLETED,
+                    run_id=run_id,
+                    stage_name=_STAGE,
+                    payload={"cached": True},
+                )
+            )
+            return {
+                "stage_statuses": stage_statuses,
+                "cached_stages": cached_stages,
+            }
 
     if extraction is None:
         msg = f"[{_STAGE}] extraction is None — skipping."

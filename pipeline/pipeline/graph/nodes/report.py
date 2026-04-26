@@ -20,7 +20,6 @@ import json
 import uuid
 from typing import Any
 
-from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.graph.state import PipelineState
 from pipeline.domains.ai_ml.schema import AiMlExtraction
@@ -307,6 +306,28 @@ async def _store_report_output(paper_id: str, report: ReportOutput) -> None:
         log.warning("report_store_failed", reason=str(exc))
 
 
+async def _load_cached_report(paper_id: str) -> str | None:
+    """Return a cached report path if one exists in the DB."""
+    try:
+        from pipeline.db.session import get_db_context
+        from pipeline.db.models import OutputORM
+        from sqlalchemy import select
+        import uuid
+
+        async with get_db_context() as session:
+            stmt = (
+                select(OutputORM.storage_path)
+                .where(OutputORM.paper_id == uuid.UUID(paper_id))
+                .where(OutputORM.output_type == "report")
+                .limit(1)
+            )
+            res = await session.execute(stmt)
+            return res.scalar_one_or_none()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("report_cache_miss", reason=str(exc))
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Node function
 # ---------------------------------------------------------------------------
@@ -338,6 +359,37 @@ async def report_node(state: PipelineState) -> dict[str, Any]:
 
     log.info("report_node.started", run_id=run_id, paper_id=paper_id)
     stage_statuses[_STAGE] = StageStatus.RUNNING
+
+    cached_stages: set[str] = set(state.get("cached_stages", set()))
+
+    # ── 0. Cache check ───────────────────────────────────────────────────────
+    from pipeline.core.config import get_settings
+
+    settings = get_settings()
+
+    if settings.pipeline.cache_enabled and paper_id:
+        cached_path = await _load_cached_report(paper_id)
+        if cached_path:
+            log.info("report_node.cache_hit", run_id=run_id)
+            stage_statuses[_STAGE] = StageStatus.CACHED
+            cached_stages.add(_STAGE)
+            from pipeline.core.events import Event, EventType, default_bus
+
+            default_bus.emit(
+                Event(
+                    type=EventType.STAGE_COMPLETED,
+                    run_id=run_id,
+                    stage_name=_STAGE,
+                    payload={"cached": True},
+                )
+            )
+            # When report hits cache, we can safely skip markdown generation
+            # and just return the report path.
+            return {
+                "report_path": cached_path,
+                "stage_statuses": stage_statuses,
+                "cached_stages": cached_stages,
+            }
 
     try:
         # ── 1. Assemble Markdown ─────────────────────────────────────────
