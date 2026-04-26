@@ -28,10 +28,10 @@ from typing import Any
 import nbformat  # type: ignore[import-untyped]
 import litellm  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from jinja2 import Environment, FileSystemLoader
-from supabase import create_client  # type: ignore[import-untyped]
+
+
+from jinja2 import Environment
+from pipeline.db.engine import get_supabase_client
 
 from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
@@ -86,13 +86,15 @@ def _validate_python(code: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-def _render_prompt(extraction: AiMlExtraction) -> str:
+async def _render_prompt(extraction: AiMlExtraction) -> str:
     """Render codegen_v1.j2 with extraction data."""
-    env = Environment(
-        loader=FileSystemLoader(str(_PROMPT_PATH.parent)),
-        autoescape=False,
-    )
-    template = env.get_template(_PROMPT_PATH.name)
+    import aiofiles  # type: ignore[import-untyped]
+
+    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
+        template_str = await f.read()
+
+    env = Environment(autoescape=False)
+    template = env.from_string(template_str)
     return template.render(
         task=extraction.task,
         proposed_method_summary=extraction.proposed_method_summary,
@@ -105,7 +107,7 @@ def _render_prompt(extraction: AiMlExtraction) -> str:
     )
 
 
-def _call_gemini_codegen(
+async def _call_gemini_codegen(
     prompt: str,
     run_id: str,
     collector: TelemetryCollector,
@@ -119,33 +121,40 @@ def _call_gemini_codegen(
 
     for attempt in range(1, max_retries + 1):
         with track_llm_call(collector, stage_name=_STAGE, model=model) as ctx:
-            response = litellm.completion(
+            response = await litellm.acompletion(
                 model=model,
                 messages=messages,
                 temperature=settings.gemini.temperature,
                 max_tokens=settings.gemini.max_output_tokens,
                 num_retries=3,
-                response_format=CodegenResponse,  # Force JSON mode
                 api_key=settings.gemini.api_key.get_secret_value(),
+                # NOTE: No response_format — the prompt asks for raw Python code.
+                # JSON mode wraps the code in a JSON string, breaking ast.parse.
             )
             ctx.set_response(response)
 
         raw = (response.choices[0].message.content or "").strip()
 
-        try:
-            cleaned = extract_json(raw)
-            data = json.loads(cleaned)
-            validated = CodegenResponse.model_validate(data)
-            code = validated.python_code.strip()
-        except Exception as exc:
-            log.warning("codegen_node.parse_failed", error=str(exc), raw=raw)
-            code = raw
-
         # Strip markdown fences if present
+        code = raw
         if code.startswith("```"):
             code = re.sub(r"^```[a-z]*\n?", "", code)
             code = re.sub(r"\n?```$", "", code)
             code = code.strip()
+
+        # Fallback: if model wrapped in JSON despite instructions, extract it
+        if not code.strip().startswith(("import ", "from ", "#", "class ", "def ")):
+            try:
+                cleaned = extract_json(raw)
+                data = json.loads(cleaned)
+                validated = CodegenResponse.model_validate(data)
+                extracted = validated.python_code.strip()
+                if extracted.startswith("```"):
+                    extracted = re.sub(r"^```[a-z]*\n?", "", extracted)
+                    extracted = re.sub(r"\n?```$", "", extracted)
+                code = extracted.strip()
+            except Exception:
+                pass  # Keep raw code
 
         is_valid, error_msg = _validate_python(code)
 
@@ -213,48 +222,47 @@ def _build_notebook(python_code: str, paper_metadata: Any | None) -> bytes:
     return nbformat.writes(nb).encode("utf-8")
 
 
-def _upload_artefacts(
+async def _upload_artefacts(
     paper_id: str,
     python_code: str,
     notebook_bytes: bytes,
 ) -> tuple[str | None, str | None]:
     """Upload .py and .ipynb to Supabase Storage, return (py_path, nb_path)."""
-    try:
-        settings = get_settings()
-        client = create_client(
-            settings.supabase.url,
-            settings.supabase.service_role_key.get_secret_value(),
-        )
+    import asyncio
 
-        py_path = f"{paper_id}/code/model.py"
-        nb_path = f"{paper_id}/code/model.ipynb"
+    def _do_upload() -> tuple[str | None, str | None]:
+        try:
+            client = get_supabase_client()
 
-        client.storage.from_(_OUTPUTS_BUCKET).upload(
-            path=py_path,
-            file=python_code.encode("utf-8"),
-            file_options={"content-type": "text/x-python"},
-        )
-        client.storage.from_(_OUTPUTS_BUCKET).upload(
-            path=nb_path,
-            file=notebook_bytes,
-            file_options={"content-type": "application/json"},
-        )
+            py_path = f"{paper_id}/code/model.py"
+            nb_path = f"{paper_id}/code/model.ipynb"
 
-        return py_path, nb_path
+            client.storage.from_(_OUTPUTS_BUCKET).upload(
+                path=py_path,
+                file=python_code.encode("utf-8"),
+                file_options={"content-type": "text/x-python"},
+            )
+            client.storage.from_(_OUTPUTS_BUCKET).upload(
+                path=nb_path,
+                file=notebook_bytes,
+                file_options={"content-type": "application/json"},
+            )
 
-    except Exception as exc:  # noqa: BLE001
-        log.warning("codegen_upload_skipped", reason=str(exc))
-        return None, None
+            return py_path, nb_path
+
+        except Exception as exc:  # noqa: BLE001
+            log.warning("codegen_upload_skipped", reason=str(exc))
+            return None, None
+
+    return await asyncio.to_thread(_do_upload)
 
 
-def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
+async def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
     """Persist CodeOutput record to the ``outputs`` table."""
     try:
-        settings = get_settings()
-        engine = create_engine(
-            settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
-        )
-        with Session(engine) as session:
+        from pipeline.db.session import get_db_context
+
+        async with get_db_context() as session:
             row = OutputORM(
                 id=uuid.uuid4(),
                 paper_id=uuid.UUID(paper_id),
@@ -262,8 +270,7 @@ def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
                 storage_path=code_output.python_path or "inline:model.py",
             )
             session.add(row)
-            session.commit()
-        engine.dispose()
+            await session.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("codegen_store_failed", reason=str(exc))
 
@@ -273,7 +280,7 @@ def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
 # ---------------------------------------------------------------------------
 
 
-def codegen_node(state: PipelineState) -> dict[str, Any]:
+async def codegen_node(state: PipelineState) -> dict[str, Any]:
     """Generate a PyTorch implementation skeleton for the paper.
 
     Reads from state
@@ -307,11 +314,11 @@ def codegen_node(state: PipelineState) -> dict[str, Any]:
 
     try:
         settings = get_settings()
-        collector = TelemetryCollector(run_id=run_id)
+        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
 
         # ── 1. Render prompt and generate code ───────────────────────────
-        prompt = _render_prompt(extraction)
-        python_code = _call_gemini_codegen(
+        prompt = await _render_prompt(extraction)
+        python_code = await _call_gemini_codegen(
             prompt, run_id, collector, max_retries=settings.gemini.max_retries
         )
 
@@ -323,7 +330,9 @@ def codegen_node(state: PipelineState) -> dict[str, Any]:
         # ── 3. Upload artefacts ──────────────────────────────────────────
         py_path, nb_path = None, None
         if paper_id:
-            py_path, nb_path = _upload_artefacts(paper_id, python_code, notebook_bytes)
+            py_path, nb_path = await _upload_artefacts(
+                paper_id, python_code, notebook_bytes
+            )
 
         # ── 4. Build CodeOutput ──────────────────────────────────────────
         paper_uuid = uuid.UUID(paper_id) if paper_id else uuid.uuid4()
@@ -338,7 +347,7 @@ def codegen_node(state: PipelineState) -> dict[str, Any]:
         )
 
         if paper_id:
-            _store_code_output(paper_id, code_output)
+            await _store_code_output(paper_id, code_output)
 
         # ── 5. Emit event ────────────────────────────────────────────────
         stage_statuses[_STAGE] = StageStatus.COMPLETED

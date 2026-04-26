@@ -7,9 +7,9 @@ Responsibilities
 ----------------
 1. Works from ``state["extraction"]``.
 2. Renders ``diagram_v1.j2`` with architecture components and flow descriptions.
-3. Makes three LiteLLM calls — ARCHITECTURE, TRAINING_FLOW, INFERENCE_FLOW.
+3. Makes three **parallel** LiteLLM calls — ARCHITECTURE, TRAINING_FLOW, INFERENCE_FLOW.
 4. Validates Mermaid syntax; on failure, retries with error feedback.
-5. Uploads SVG files to Supabase Storage ``outputs`` bucket.
+5. Uploads SVG files to Supabase Storage ``outputs`` bucket (requires mmdc).
 6. Stores ``DiagramOutput`` records in DB.
 7. Updates state with ``diagrams``.
 8. Emits ``STAGE_COMPLETED`` event.
@@ -17,8 +17,10 @@ Responsibilities
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -26,17 +28,16 @@ from pathlib import Path
 from typing import Any
 
 import litellm  # type: ignore[import-untyped]
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from supabase import create_client  # type: ignore[import-untyped]
+
 
 from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
 from pipeline.core.utils import extract_json
+from pipeline.db.engine import get_supabase_client
 from pipeline.db.models import OutputORM
 from pipeline.domains.ai_ml.schema import AiMlExtraction
 from pipeline.graph.state import PipelineState
@@ -66,8 +67,32 @@ class DiagramResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _validate_mermaid(dsl: str) -> tuple[bool, str]:
-    """Validate Mermaid DSL syntax."""
+def _find_mmdc() -> str | None:
+    """Find the mmdc executable, checking common locations including npm global."""
+    # Standard PATH lookup
+    mmdc = shutil.which("mmdc")
+    if mmdc:
+        return mmdc
+
+    # Windows npm global installs go to AppData/Roaming/npm
+    import os
+
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        candidate = Path(appdata) / "npm" / "mmdc.cmd"
+        if candidate.exists():
+            return str(candidate)
+
+    return None
+
+
+_MMDC_PATH: str | None = _find_mmdc()
+
+
+async def _validate_mermaid(dsl: str) -> tuple[bool, str]:
+    """Validate Mermaid DSL syntax using a quick structural check."""
+    import asyncio
+
     stripped = dsl.strip()
     valid_starts = (
         "graph ",
@@ -92,25 +117,34 @@ def _validate_mermaid(dsl: str) -> tuple[bool, str]:
     if open_count != 0:
         return False, f"Mismatched square brackets (delta={open_count})."
 
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".mmd", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(stripped)
-            tmp_path = f.name
+    if _MMDC_PATH:
 
-        result = subprocess.run(
-            ["mmdc", "-i", tmp_path, "-o", "/dev/null"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        Path(tmp_path).unlink(missing_ok=True)
+        def _run_mmdc():
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".mmd", delete=False, encoding="utf-8"
+                ) as in_f:
+                    in_f.write(stripped)
+                    tmp_in = in_f.name
 
-        if result.returncode != 0:
-            return False, result.stderr.strip() or "mmdc validation failed."
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+                tmp_out = tmp_in.replace(".mmd", "_validate.svg")
+
+                result = subprocess.run(
+                    [_MMDC_PATH, "-i", tmp_in, "-o", tmp_out],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                Path(tmp_in).unlink(missing_ok=True)
+                Path(tmp_out).unlink(missing_ok=True)
+
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or "mmdc validation failed."
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+            return True, ""
+
+        return await asyncio.to_thread(_run_mmdc)
 
     return True, ""
 
@@ -120,16 +154,18 @@ def _validate_mermaid(dsl: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-def _render_prompt(
+async def _render_prompt(
     extraction: AiMlExtraction,
     diagram_type: DiagramType,
 ) -> str:
     """Render diagram_v1.j2 for the given diagram type."""
-    env = Environment(
-        loader=FileSystemLoader(str(_PROMPT_PATH.parent)),
-        autoescape=False,
-    )
-    template = env.get_template(_PROMPT_PATH.name)
+    import aiofiles  # type: ignore[import-untyped]
+
+    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
+        template_str = await f.read()
+
+    env = Environment(autoescape=False)
+    template = env.from_string(template_str)
     return template.render(
         architecture_components=[
             c.model_dump() for c in extraction.architecture_components
@@ -140,7 +176,7 @@ def _render_prompt(
     )
 
 
-def _call_gemini_diagram(
+async def _call_gemini_diagram_async(
     prompt: str,
     diagram_type: DiagramType,
     run_id: str,
@@ -153,38 +189,48 @@ def _call_gemini_diagram(
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
+    dsl = ""
     for attempt in range(1, max_retries + 1):
         with track_llm_call(
             collector, stage_name=f"{_STAGE}.{diagram_type.value}", model=model
         ) as ctx:
-            response = litellm.completion(
+            response = await litellm.acompletion(
                 model=model,
                 messages=messages,
                 temperature=settings.gemini.temperature,
                 max_tokens=8192,
                 num_retries=3,
-                response_format=DiagramResponse,  # Force JSON mode
                 api_key=settings.gemini.api_key.get_secret_value(),
             )
             ctx.set_response(response)
 
         raw = (response.choices[0].message.content or "").strip()
 
-        try:
-            cleaned = extract_json(raw)
-            data = json.loads(cleaned)
-            validated = DiagramResponse.model_validate(data)
-            dsl = validated.dsl.strip()
-        except Exception as exc:
-            log.warning("diagram_node.parse_failed", error=str(exc), raw=raw)
-            dsl = raw
-
+        # Strip markdown fences if the model wraps despite instructions
+        dsl = raw
         if dsl.startswith("```"):
             dsl = re.sub(r"^```[a-z]*\n?", "", dsl)
             dsl = re.sub(r"\n?```$", "", dsl)
             dsl = dsl.strip()
 
-        is_valid, error_msg = _validate_mermaid(dsl)
+        # Try JSON extraction as a fallback
+        if not any(
+            dsl.startswith(s)
+            for s in ("graph ", "flowchart ", "sequenceDiagram", "classDiagram")
+        ):
+            try:
+                cleaned = extract_json(raw)
+                data = json.loads(cleaned)
+                validated = DiagramResponse.model_validate(data)
+                extracted = validated.dsl.strip()
+                if extracted.startswith("```"):
+                    extracted = re.sub(r"^```[a-z]*\n?", "", extracted)
+                    extracted = re.sub(r"\n?```$", "", extracted)
+                dsl = extracted.strip()
+            except Exception:
+                pass  # Keep raw dsl
+
+        is_valid, error_msg = await _validate_mermaid(dsl)
 
         if is_valid:
             log.info(
@@ -204,7 +250,6 @@ def _call_gemini_diagram(
         )
 
         if attempt < max_retries:
-            # Append error feedback to messages for next attempt
             messages.append({"role": "assistant", "content": raw})
             messages.append(
                 {
@@ -212,12 +257,11 @@ def _call_gemini_diagram(
                     "content": (
                         f"The Mermaid DSL you produced has a syntax error: {error_msg}\n"
                         "Please fix the syntax and return ONLY valid Mermaid DSL, "
-                        "starting with 'graph TD'. No markdown fences."
+                        "starting with 'graph TD'. No markdown fences, no JSON wrapping."
                     ),
                 }
             )
 
-    # Return best-effort DSL even if still invalid after all retries
     log.error(
         "diagram_node.dsl_invalid_after_retries",
         run_id=run_id,
@@ -226,68 +270,68 @@ def _call_gemini_diagram(
     return dsl
 
 
-def _upload_svg(paper_id: str, diagram_type: DiagramType, dsl: str) -> str | None:
+async def _upload_svg(paper_id: str, diagram_type: DiagramType, dsl: str) -> str | None:
     """Render Mermaid DSL to SVG via mmdc and upload to Supabase Storage."""
-    try:
-        with (
-            tempfile.NamedTemporaryFile(
-                mode="w", suffix=".mmd", delete=False, encoding="utf-8"
-            ) as in_f,
-            tempfile.NamedTemporaryFile(
-                mode="rb", suffix=".svg", delete=False
-            ) as out_f,
-        ):
-            in_f.write(dsl)
-            in_path = in_f.name
-            out_path = out_f.name
-
-        result = subprocess.run(
-            ["mmdc", "-i", in_path, "-o", out_path],
-            capture_output=True,
-            timeout=30,
-        )
-
-        Path(in_path).unlink(missing_ok=True)
-
-        if result.returncode != 0:
-            Path(out_path).unlink(missing_ok=True)
-            return None
-
-        svg_bytes = Path(out_path).read_bytes()
-        Path(out_path).unlink(missing_ok=True)
-
-        settings = get_settings()
-        client = create_client(
-            settings.supabase.url,
-            settings.supabase.service_role_key.get_secret_value(),
-        )
-
-        storage_path = f"{paper_id}/diagrams/{diagram_type.value}.svg"
-        client.storage.from_(_OUTPUTS_BUCKET).upload(
-            path=storage_path,
-            file=svg_bytes,
-            file_options={"content-type": "image/svg+xml"},
-        )
-
-        return storage_path
-
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "diagram_node.svg_upload_skipped",
-            diagram_type=diagram_type.value,
-            reason=str(exc),
-        )
+    if not _MMDC_PATH:
+        log.warning("diagram_node.mmdc_not_found", diagram_type=diagram_type.value)
         return None
 
+    def _do_upload() -> str | None:
+        try:
+            with (
+                tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".mmd", delete=False, encoding="utf-8"
+                ) as in_f,
+                tempfile.NamedTemporaryFile(
+                    mode="rb", suffix=".svg", delete=False
+                ) as out_f,
+            ):
+                in_f.write(dsl)
+                in_path = in_f.name
+                out_path = out_f.name
 
-def _store_diagram(paper_id: str, diagram: DiagramOutput) -> None:
+            result = subprocess.run(
+                [_MMDC_PATH, "-i", in_path, "-o", out_path],
+                capture_output=True,
+                timeout=30,
+            )
+
+            Path(in_path).unlink(missing_ok=True)
+
+            if result.returncode != 0:
+                Path(out_path).unlink(missing_ok=True)
+                return None
+
+            svg_bytes = Path(out_path).read_bytes()
+            Path(out_path).unlink(missing_ok=True)
+
+            client = get_supabase_client()
+            storage_path = f"{paper_id}/diagrams/{diagram_type.value}.svg"
+            client.storage.from_(_OUTPUTS_BUCKET).upload(
+                path=storage_path,
+                file=svg_bytes,
+                file_options={"content-type": "image/svg+xml"},
+            )
+
+            return storage_path
+
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "diagram_node.svg_upload_skipped",
+                diagram_type=diagram_type.value,
+                reason=str(exc),
+            )
+            return None
+
+    return await asyncio.to_thread(_do_upload)
+
+
+async def _store_diagram(paper_id: str, diagram: DiagramOutput) -> None:
     """Persist DiagramOutput record to the ``outputs`` table."""
     try:
-        settings = get_settings()
-        engine = create_engine(
-            settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
-        )
-        with Session(engine) as session:
+        from pipeline.db.session import get_db_context
+
+        async with get_db_context() as session:
             row = OutputORM(
                 id=uuid.uuid4(),
                 paper_id=uuid.UUID(paper_id),
@@ -295,8 +339,7 @@ def _store_diagram(paper_id: str, diagram: DiagramOutput) -> None:
                 storage_path=diagram.svg_path or f"inline:{diagram.diagram_type.value}",
             )
             session.add(row)
-            session.commit()
-        engine.dispose()
+            await session.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("diagram_store_failed", reason=str(exc))
 
@@ -306,8 +349,10 @@ def _store_diagram(paper_id: str, diagram: DiagramOutput) -> None:
 # ---------------------------------------------------------------------------
 
 
-def diagram_node(state: PipelineState) -> dict[str, Any]:
+async def diagram_node(state: PipelineState) -> dict[str, Any]:
     """Generate architecture and flow diagrams from the paper extraction.
+
+    All three diagram types are generated in **parallel** via asyncio.gather.
 
     Reads from state
     ----------------
@@ -338,27 +383,32 @@ def diagram_node(state: PipelineState) -> dict[str, Any]:
         return {"stage_statuses": stage_statuses, "errors": errors, "diagrams": []}
 
     try:
-        from pipeline.core.config import get_settings
-
         settings = get_settings()
-        collector = TelemetryCollector(run_id=run_id)
-        diagrams: list[DiagramOutput] = []
+        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
+        diagram_types = list(DiagramType)
 
-        for diagram_type in DiagramType:
-            log.info("diagram_node.processing_type", type=diagram_type.value)
-            prompt = _render_prompt(extraction, diagram_type)
-            dsl = _call_gemini_diagram(
+        # Pre-render prompts sequentially
+        prompts = [await _render_prompt(extraction, dt) for dt in diagram_types]
+
+        # ── Parallel LLM calls: all 3 diagram types at once ───────────────
+        tasks = [
+            _call_gemini_diagram_async(
                 prompt,
-                diagram_type,
+                dt,
                 run_id,
                 collector,
-                max_retries=settings.gemini.max_retries,
+                settings.gemini.max_retries,
             )
+            for prompt, dt in zip(prompts, diagram_types)
+        ]
+        dsls = await asyncio.gather(*tasks)
 
+        diagrams: list[DiagramOutput] = []
+        for diagram_type, dsl in zip(diagram_types, dsls):
             svg_path: str | None = None
             if paper_id:
                 log.info("diagram_node.rendering_svg", type=diagram_type.value)
-                svg_path = _upload_svg(paper_id, diagram_type, dsl)
+                svg_path = await _upload_svg(paper_id, diagram_type, dsl)
 
             diagram = DiagramOutput(
                 paper_id=uuid.UUID(paper_id) if paper_id else uuid.uuid4(),
@@ -370,13 +420,14 @@ def diagram_node(state: PipelineState) -> dict[str, Any]:
             diagrams.append(diagram)
 
             if paper_id:
-                _store_diagram(paper_id, diagram)
+                await _store_diagram(paper_id, diagram)
 
             log.info(
                 "diagram_node.diagram_done",
                 run_id=run_id,
                 diagram_type=diagram_type.value,
                 has_svg=svg_path is not None,
+                dsl_lines=len(dsl.splitlines()),
             )
 
         token_usage[_STAGE] = collector.total_tokens
@@ -404,7 +455,6 @@ def diagram_node(state: PipelineState) -> dict[str, Any]:
         msg = f"[{_STAGE}] {exc}"
         errors.append(msg)
         stage_statuses[_STAGE] = StageStatus.FAILED
-        log.exception("diagram_node.failed", run_id=run_id, error=str(exc))
         default_bus.emit(
             Event(
                 type=EventType.STAGE_FAILED,

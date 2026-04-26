@@ -41,6 +41,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "sentry-sdk[fastapi]>=2.0.0",
     "PyJWT>=2.8.0",
+    "aiofiles>=25.1.0",
 ]
 
 [dependency-groups]
@@ -52,6 +53,7 @@ dev = [
     "ruff>=0.15.8",
     "freezegun>=1.5.1",
     "types-PyYAML",
+    "types-aiofiles",
 ]
 
 [tool.mypy]

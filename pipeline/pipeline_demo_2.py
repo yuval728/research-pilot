@@ -26,6 +26,10 @@ import textwrap
 import uuid
 from datetime import datetime
 
+# Force UTF-8 output on Windows (avoids cp1252 UnicodeEncodeError with box-drawing chars)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+
 # ── ANSI colours ────────────────────────────────────────────────────────────
 BOLD = "\033[1m"
 DIM = "\033[2m"

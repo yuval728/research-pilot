@@ -264,44 +264,37 @@ def _build_markdown(
 # ---------------------------------------------------------------------------
 
 
-def _upload_report(paper_id: str, markdown: str) -> str:
+async def _upload_report(paper_id: str, markdown: str) -> str:
     """Upload the Markdown report to Supabase Storage, return storage path."""
+    import asyncio
+
     storage_path = f"{paper_id}/report.md"
-    try:
-        from pipeline.core.config import get_settings
-        from supabase import create_client  # type: ignore[import-untyped]
 
-        settings = get_settings()
-        client = create_client(
-            settings.supabase.url,
-            settings.supabase.service_role_key.get_secret_value(),
-        )
-        client.storage.from_(_OUTPUTS_BUCKET).upload(
-            path=storage_path,
-            file=markdown.encode("utf-8"),
-            file_options={"content-type": "text/markdown"},
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("report_upload_skipped", reason=str(exc))
-        storage_path = f"local://{paper_id}/report.md"
+    def _do_upload() -> str:
+        try:
+            from pipeline.db.engine import get_supabase_client
 
-    return storage_path
+            client = get_supabase_client()
+            client.storage.from_(_OUTPUTS_BUCKET).upload(
+                path=storage_path,
+                file=markdown.encode("utf-8"),
+                file_options={"content-type": "text/markdown"},
+            )
+            return storage_path
+        except Exception as exc:  # noqa: BLE001
+            log.warning("report_upload_skipped", reason=str(exc))
+            return f"local://{paper_id}/report.md"
+
+    return await asyncio.to_thread(_do_upload)
 
 
-def _store_report_output(paper_id: str, report: ReportOutput) -> None:
+async def _store_report_output(paper_id: str, report: ReportOutput) -> None:
     """Persist ReportOutput to the ``outputs`` table."""
     try:
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import Session
-
-        from pipeline.core.config import get_settings
+        from pipeline.db.session import get_db_context
         from pipeline.db.models import OutputORM
 
-        settings = get_settings()
-        engine = create_engine(
-            settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
-        )
-        with Session(engine) as session:
+        async with get_db_context() as session:
             row = OutputORM(
                 id=uuid.uuid4(),
                 paper_id=uuid.UUID(paper_id),
@@ -309,8 +302,7 @@ def _store_report_output(paper_id: str, report: ReportOutput) -> None:
                 storage_path=report.markdown_path,
             )
             session.add(row)
-            session.commit()
-        engine.dispose()
+            await session.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("report_store_failed", reason=str(exc))
 
@@ -320,7 +312,7 @@ def _store_report_output(paper_id: str, report: ReportOutput) -> None:
 # ---------------------------------------------------------------------------
 
 
-def report_node(state: PipelineState) -> dict[str, Any]:
+async def report_node(state: PipelineState) -> dict[str, Any]:
     """Assemble the final Markdown report and emit RUN_COMPLETED.
 
     Reads from state
@@ -359,7 +351,7 @@ def report_node(state: PipelineState) -> dict[str, Any]:
         )
 
         # ── 2. Upload to Supabase Storage ────────────────────────────────
-        storage_path = _upload_report(paper_id or run_id, markdown)
+        storage_path = await _upload_report(paper_id or run_id, markdown)
 
         # ── 3. Persist ReportOutput to DB ────────────────────────────────
         paper_uuid = uuid.UUID(paper_id) if paper_id else uuid.uuid4()
@@ -369,7 +361,7 @@ def report_node(state: PipelineState) -> dict[str, Any]:
         )
 
         if paper_id:
-            _store_report_output(paper_id, report_output)
+            await _store_report_output(paper_id, report_output)
 
         # ── 4. Emit RUN_COMPLETED ────────────────────────────────────────
         stage_statuses[_STAGE] = StageStatus.COMPLETED

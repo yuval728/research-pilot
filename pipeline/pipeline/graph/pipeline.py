@@ -39,21 +39,16 @@ Graph topology
       ▼
      END
 
-Note on "parallelism"
----------------------
-The spec describes summarise, embed, diagram, and codegen as running in
-parallel after extract. In this implementation they run **sequentially**
-(summarise → embed → diagram → codegen) for the following reasons:
+Parallelism
+-----------
+After ``extract``, the four independent stages (summarise, embed, diagram,
+codegen) have **zero data dependencies** between them — they all read from
+``extraction`` and write to disjoint state fields.  Rather than the original
+sequential chain, they now run inside a single ``parallel_stages_node`` that
+uses ``asyncio.gather`` to fan out all four LLM workloads concurrently.
 
-1. LangGraph's basic ``StateGraph`` merges returned dicts. True fan-out
-   requires the ``Send()`` API and explicit fan-in, adding significant
-   complexity and fragile state merging.
-2. The four stages are I/O-bound (LLM calls) with no data interdependencies,
-   so sequential execution produces identical output — only slightly slower.
-3. Sequential execution is far easier to debug, trace, and test.
-
-If concurrent execution becomes a requirement, a ``Send()``-based branch
-can be added incrementally without restructuring the node code.
+This eliminates the idle time between stages (previously each waited for the
+previous to finish before even starting its first LLM call).
 
 Exports
 -------
@@ -74,12 +69,14 @@ Usage
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 from langgraph.graph import END, START, StateGraph  # type: ignore[import-untyped]
 
 from pipeline.graph.edges import (
     after_extract_route,
     should_continue_after_classify,
-    should_run_codegen,
 )
 from pipeline.graph.nodes import (
     classify_node,
@@ -92,6 +89,99 @@ from pipeline.graph.nodes import (
     summarise_node,
 )
 from pipeline.graph.state import PipelineState
+from pipeline.models.run import StageStatus
+
+
+# ---------------------------------------------------------------------------
+# Parallel stages node
+# ---------------------------------------------------------------------------
+
+
+def _merge_parallel_results(
+    base: PipelineState, results: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Merge results from parallel stage dicts into a single update dict.
+
+    Each parallel node returns a partial state dict.  We merge them
+    carefully: list fields are unioned, dict fields are merged shallowly,
+    set fields are unioned.
+    """
+    merged: dict[str, Any] = {}
+
+    for result in results:
+        for key, value in result.items():
+            if key not in merged:
+                merged[key] = value
+            elif isinstance(value, dict) and isinstance(merged[key], dict):
+                merged[key] = {**merged[key], **value}
+            elif isinstance(value, list) and isinstance(merged[key], list):
+                merged[key] = merged[key] + value
+            elif isinstance(value, set) and isinstance(merged[key], set):
+                merged[key] = merged[key] | value
+            else:
+                # For scalar fields (stage_statuses individual keys handled via dict merge above)
+                merged[key] = value
+
+    return merged
+
+
+async def parallel_stages_node(state: PipelineState) -> dict[str, Any]:
+    """Run summarise, embed, diagram, and codegen in parallel.
+
+    All four stages read from ``state["extraction"]`` and write to
+    disjoint state fields.  They are fanned out via ``asyncio.gather``
+    and their results are merged into a single state update dict.
+
+    Reads from state
+    ----------------
+    - All fields that summarise / embed / diagram / codegen individually read
+
+    Writes to state
+    ---------------
+    - All fields that summarise / embed / diagram / codegen individually write
+    """
+    from pipeline.core.logger import get_logger
+
+    log = get_logger(__name__)
+    run_id = state["run_id"]
+
+    # Determine whether to run codegen (respect theory-domain gate)
+    from pipeline.graph.edges import should_run_codegen
+
+    run_codegen = should_run_codegen(state) == "codegen"
+
+    log.info(
+        "parallel_stages_node.started",
+        run_id=run_id,
+        run_codegen=run_codegen,
+    )
+
+    # Run each async node concurrently
+    tasks = [
+        summarise_node(state),
+        embed_node(state),
+        diagram_node(state),
+    ]
+    if run_codegen:
+        tasks.append(codegen_node(state))
+
+    results = list(await asyncio.gather(*tasks))
+
+    # If codegen was skipped, inject a SKIPPED status
+    if not run_codegen:
+        results.append(
+            {
+                "stage_statuses": {
+                    **state.get("stage_statuses", {}),
+                    "codegen": StageStatus.SKIPPED,
+                },
+                "code_output": None,
+            }
+        )
+
+    merged = _merge_parallel_results(state, results)
+    log.info("parallel_stages_node.completed", run_id=run_id)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -108,10 +198,7 @@ def _build_graph() -> StateGraph:  # type: ignore[type-arg]
     builder.add_node("ingest", ingest_node)
     builder.add_node("classify", classify_node)
     builder.add_node("extract", extract_node)
-    builder.add_node("summarise", summarise_node)
-    builder.add_node("embed", embed_node)
-    builder.add_node("diagram", diagram_node)
-    builder.add_node("codegen", codegen_node)
+    builder.add_node("parallel_stages", parallel_stages_node)
     builder.add_node("report", report_node)
 
     # ── Entry edge ───────────────────────────────────────────────────────────
@@ -130,32 +217,18 @@ def _build_graph() -> StateGraph:  # type: ignore[type-arg]
         },
     )
 
-    # ── extract → [summarise | END] (failure gate) ───────────────────────────
+    # ── extract → [parallel_stages | END] (failure gate) ────────────────────
     builder.add_conditional_edges(
         "extract",
         after_extract_route,
         {
-            "summarise": "summarise",
+            "summarise": "parallel_stages",  # "summarise" key maps to parallel node
             "__end__": END,
         },
     )
 
-    # ── Sequential post-extract chain ─────────────────────────────────────────
-    builder.add_edge("summarise", "embed")
-    builder.add_edge("embed", "diagram")
-
-    # ── diagram → [codegen | report] (theory-domain gate) ────────────────────
-    builder.add_conditional_edges(
-        "diagram",
-        should_run_codegen,
-        {
-            "codegen": "codegen",
-            "report": "report",
-        },
-    )
-
-    # ── codegen → report ──────────────────────────────────────────────────────
-    builder.add_edge("codegen", "report")
+    # ── parallel_stages → report ──────────────────────────────────────────────
+    builder.add_edge("parallel_stages", "report")
 
     # ── report → END ─────────────────────────────────────────────────────────
     builder.add_edge("report", END)

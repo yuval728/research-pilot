@@ -26,9 +26,9 @@ from typing import Any
 
 import instructor  # type: ignore[import-untyped]
 import litellm  # type: ignore[import-untyped]
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session
-from jinja2 import Environment, FileSystemLoader
+from sqlalchemy import text
+
+from jinja2 import Environment
 
 from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
@@ -51,28 +51,28 @@ log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _render_prompt(domain: str | None, sub_domain: str | None) -> str:
+async def _render_prompt(domain: str | None, sub_domain: str | None) -> str:
     """Render the extract_v1.j2 template with domain context."""
-    env = Environment(
-        loader=FileSystemLoader(str(_PROMPT_PATH.parent)),
-        autoescape=False,
-    )
-    template = env.get_template(_PROMPT_PATH.name)
+    import aiofiles  # type: ignore[import-untyped]
+
+    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
+        template_str = await f.read()
+
+    env = Environment(autoescape=False)
+    template = env.from_string(template_str)
     return template.render(
         domain=domain or "AI/ML",
         sub_domain=sub_domain or "General",
     )
 
 
-def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
+async def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
     """Return a cached ``AiMlExtraction`` if one exists in the DB."""
     try:
-        settings = get_settings()
-        engine = create_engine(
-            settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
-        )
-        with engine.connect() as conn:
-            row = conn.execute(
+        from pipeline.db.session import get_db_context
+
+        async with get_db_context() as session:
+            res = await session.execute(
                 text(
                     """
                     SELECT data FROM extractions
@@ -82,9 +82,8 @@ def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
                     """
                 ),
                 {"pid": paper_id, "sv": _SCHEMA_VERSION},
-            ).fetchone()
-        engine.dispose()
-
+            )
+            row = res.fetchone()
         if row:
             return AiMlExtraction.model_validate(row.data)
     except Exception as exc:  # noqa: BLE001
@@ -93,7 +92,7 @@ def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
     return None
 
 
-def _call_gemini_extract(
+async def _call_gemini_extract(
     pdf_bytes: bytes,
     prompt: str,
     run_id: str,
@@ -121,10 +120,10 @@ def _call_gemini_extract(
     ]
 
     # Patch LiteLLM client with Instructor for structured output + auto-retry
-    client = instructor.from_litellm(litellm.completion)
+    client = instructor.from_litellm(litellm.acompletion)
 
     with track_llm_call(collector, stage_name=_STAGE, model=model) as ctx:
-        extraction, raw_response = client.chat.completions.create_with_completion(
+        extraction, raw_response = await client.chat.completions.create_with_completion(
             model=model,
             response_model=AiMlExtraction,
             messages=messages,
@@ -137,19 +136,16 @@ def _call_gemini_extract(
     return extraction
 
 
-def _store_extraction(
+async def _store_extraction(
     paper_id: str,
     extraction: AiMlExtraction,
     domain: str | None,
 ) -> None:
     """Persist the extraction JSONB to the ``extractions`` table."""
     try:
-        settings = get_settings()
-        engine = create_engine(
-            settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
-        )
+        from pipeline.db.session import get_db_context
 
-        with Session(engine) as session:
+        async with get_db_context() as session:
             row = ExtractionORM(
                 id=uuid.uuid4(),
                 paper_id=uuid.UUID(paper_id),
@@ -158,8 +154,7 @@ def _store_extraction(
                 data=extraction.model_dump(mode="json"),
             )
             session.add(row)
-            session.commit()
-        engine.dispose()
+            await session.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("extract_store_failed", reason=str(exc))
 
@@ -169,7 +164,7 @@ def _store_extraction(
 # ---------------------------------------------------------------------------
 
 
-def extract_node(state: PipelineState) -> dict[str, Any]:
+async def extract_node(state: PipelineState) -> dict[str, Any]:
     """Extract structured information from the paper PDF.
 
     Reads from state
@@ -200,7 +195,7 @@ def extract_node(state: PipelineState) -> dict[str, Any]:
     try:
         # ── 1. Cache check ───────────────────────────────────────────────
         if paper_id:
-            cached = _load_cached_extraction(paper_id)
+            cached = await _load_cached_extraction(paper_id)
             if cached:
                 log.info("extract_node.cache_hit", run_id=run_id)
                 stage_statuses[_STAGE] = StageStatus.CACHED
@@ -225,14 +220,14 @@ def extract_node(state: PipelineState) -> dict[str, Any]:
             raise ValueError("extract_node requires pdf_bytes in state.")
 
         # ── 3. Render prompt and call Gemini + Instructor ────────────────
-        prompt = _render_prompt(domain, sub_domain)
-        collector = TelemetryCollector(run_id=run_id)
-        extraction = _call_gemini_extract(pdf_bytes, prompt, run_id, collector)
+        prompt = await _render_prompt(domain, sub_domain)
+        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
+        extraction = await _call_gemini_extract(pdf_bytes, prompt, run_id, collector)
         token_usage[_STAGE] = collector.total_tokens
 
         # ── 4. Persist to DB ─────────────────────────────────────────────
         if paper_id:
-            _store_extraction(paper_id, extraction, domain)
+            await _store_extraction(paper_id, extraction, domain)
 
         # ── 5. Emit event ────────────────────────────────────────────────
         stage_statuses[_STAGE] = StageStatus.COMPLETED

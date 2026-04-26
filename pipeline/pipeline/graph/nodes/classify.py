@@ -5,13 +5,14 @@ pipeline.graph.nodes.classify
 
 Responsibilities
 ----------------
-1. Check cache — if this paper was already classified, load from DB.
+1. Check cache — load from DB if this paper was already classified.
 2. Fetch PDF bytes from Supabase Storage if not already in state.
 3. Render ``classify_v1.j2`` prompt.
 4. Send PDF + prompt to Gemini via LiteLLM (vision).
 5. Parse response into ``ClassificationResult`` Pydantic model.
-6. Update state: ``domain``, ``sub_domain``, ``classification_confidence``.
-7. Emit ``STAGE_COMPLETED`` event.
+6. **Persist classification** to the ``papers`` metadata JSONB column.
+7. Update state: ``domain``, ``sub_domain``, ``classification_confidence``.
+8. Emit ``STAGE_COMPLETED`` event.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ from typing import Any
 
 import litellm  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
-from supabase import create_client  # type: ignore[import-untyped]
 
 from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
@@ -58,23 +58,29 @@ class ClassificationResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _load_prompt() -> str:
+async def _load_prompt() -> str:
     """Load the Jinja2 template as a plain string (no variables needed)."""
-    return _PROMPT_PATH.read_text(encoding="utf-8")
+    import aiofiles  # type: ignore[import-untyped]
+
+    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
+        return await f.read()
 
 
-def _fetch_pdf_bytes(storage_path: str) -> bytes:
+async def _fetch_pdf_bytes(storage_path: str) -> bytes:
     """Download PDF bytes from Supabase Storage."""
-    settings = get_settings()
-    client = create_client(
-        settings.supabase.url,
-        settings.supabase.service_role_key.get_secret_value(),
-    )
-    response = client.storage.from_("papers").download(storage_path)
-    return bytes(response)
+    from pipeline.db.engine import get_supabase_client
+    import asyncio
+
+    client = get_supabase_client()
+
+    def _do_download():
+        response = client.storage.from_("papers").download(storage_path)
+        return bytes(response)
+
+    return await asyncio.to_thread(_do_download)
 
 
-def _call_gemini_classify(
+async def _call_gemini_classify(
     pdf_bytes: bytes,
     prompt: str,
     run_id: str,
@@ -105,21 +111,18 @@ def _call_gemini_classify(
     ]
 
     with track_llm_call(collector, stage_name=_STAGE, model=model) as ctx:
-        response = litellm.completion(
+        response = await litellm.acompletion(
             model=model,
             messages=messages,
             temperature=settings.gemini.temperature,
             max_tokens=4096,  # Increased to prevent truncation
             num_retries=3,
-            response_format=ClassificationResult,  # Native JSON schema mode
+            response_format=ClassificationResult,
             api_key=settings.gemini.api_key.get_secret_value(),
         )
         ctx.set_response(response)
 
     raw = response.choices[0].message.content or "{}"
-
-    # Even in JSON mode, LiteLLM/Gemini sometimes wraps in markdown or prose.
-    # We use a robust extractor before parsing.
     cleaned = extract_json(raw)
 
     try:
@@ -129,41 +132,38 @@ def _call_gemini_classify(
         log.error(
             "classify_node.parse_failed", error=str(exc), raw=raw, cleaned=cleaned
         )
-        # Fallback: if native mode failed, try to find ANY JSON in the raw response
-        try:
-            fallback_cleaned = extract_json(raw)
-            data = json.loads(fallback_cleaned)
-            return ClassificationResult.model_validate(data)
-        except Exception:
-            raise
+        raise
 
 
-def _load_cached_classification(paper_id: str) -> ClassificationResult | None:
-    """Try to load an existing classification from the DB."""
+async def _load_cached_classification(paper_id: str) -> ClassificationResult | None:
+    """Try to load an existing classification from the papers.metadata JSONB column.
+
+    Classification is persisted into ``papers.metadata`` under the keys
+    ``cls_domain``, ``cls_sub_domain``, and ``cls_confidence`` so it
+    survives across pipeline re-runs without a dedicated table.
+    """
     try:
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
 
-        from pipeline.core.config import get_settings
+        from pipeline.db.session import get_db_context
 
-        settings = get_settings()
-        db_url = settings.supabase.db_url.get_secret_value()
-        engine = create_engine(db_url, pool_pre_ping=True)
-
-        with engine.connect() as conn:
-            row = conn.execute(
+        async with get_db_context() as session:
+            res = await session.execute(
                 text(
                     """
-                    SELECT data->>'domain' AS domain,
-                           data->>'sub_domain' AS sub_domain,
-                           (data->>'confidence_score')::float AS confidence
-                    FROM extractions
-                    WHERE paper_id = :pid
+                    SELECT
+                        metadata->>'cls_domain'      AS domain,
+                        metadata->>'cls_sub_domain'  AS sub_domain,
+                        (metadata->>'cls_confidence')::float AS confidence
+                    FROM papers
+                    WHERE id = CAST(:pid AS UUID)
+                      AND metadata->>'cls_domain' IS NOT NULL
                     LIMIT 1
                     """
                 ),
                 {"pid": paper_id},
-            ).fetchone()
-        engine.dispose()
+            )
+            row = res.fetchone()
 
         if row and row.domain:
             return ClassificationResult(
@@ -177,12 +177,46 @@ def _load_cached_classification(paper_id: str) -> ClassificationResult | None:
     return None
 
 
+async def _persist_classification(paper_id: str, result: ClassificationResult) -> None:
+    """Merge classification result into papers.metadata JSONB."""
+    try:
+        from sqlalchemy import text
+
+        from pipeline.db.session import get_db_context
+        import json
+
+        async with get_db_context() as session:
+            await session.execute(
+                text(
+                    """
+                    UPDATE papers
+                    SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:new_meta AS JSONB)
+                    WHERE id = :pid
+                    """
+                ),
+                {
+                    "pid": paper_id,
+                    "new_meta": json.dumps(
+                        {
+                            "cls_domain": result.domain,
+                            "cls_sub_domain": result.sub_domain,
+                            "cls_confidence": str(result.confidence),
+                        }
+                    ),
+                },
+            )
+            await session.commit()
+        log.debug("classify_node.classification_persisted", paper_id=paper_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("classify_node.persist_failed", reason=str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Node function
 # ---------------------------------------------------------------------------
 
 
-def classify_node(state: PipelineState) -> dict[str, Any]:
+async def classify_node(state: PipelineState) -> dict[str, Any]:
     """Classify the paper into a domain and sub-domain.
 
     Reads from state
@@ -212,7 +246,7 @@ def classify_node(state: PipelineState) -> dict[str, Any]:
     try:
         # ── 1. Cache check ───────────────────────────────────────────────
         if paper_id:
-            cached = _load_cached_classification(paper_id)
+            cached = await _load_cached_classification(paper_id)
             if cached:
                 log.info("classify_node.cache_hit", run_id=run_id)
                 stage_statuses[_STAGE] = StageStatus.CACHED
@@ -237,20 +271,24 @@ def classify_node(state: PipelineState) -> dict[str, Any]:
         # ── 2. Ensure we have PDF bytes ──────────────────────────────────
         if pdf_bytes is None:
             if storage_path and not storage_path.startswith("local://"):
-                pdf_bytes = _fetch_pdf_bytes(storage_path)
+                pdf_bytes = await _fetch_pdf_bytes(storage_path)
             else:
                 raise ValueError(
                     "classify_node requires pdf_bytes or a valid pdf_storage_path."
                 )
 
         # ── 3. Load prompt and call Gemini ───────────────────────────────
-        prompt = _load_prompt()
-        collector = TelemetryCollector(run_id=run_id)
-        result = _call_gemini_classify(pdf_bytes, prompt, run_id, collector)
+        prompt = await _load_prompt()
+        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
+        result = await _call_gemini_classify(pdf_bytes, prompt, run_id, collector)
 
         token_usage[_STAGE] = collector.total_tokens
 
-        # ── 4. Emit event and return ─────────────────────────────────────
+        # ── 4. Persist classification to DB (enables future cache hits) ──
+        if paper_id:
+            await _persist_classification(paper_id, result)
+
+        # ── 5. Emit event and return ─────────────────────────────────────
         stage_statuses[_STAGE] = StageStatus.COMPLETED
         default_bus.emit(
             Event(
@@ -274,7 +312,7 @@ def classify_node(state: PipelineState) -> dict[str, Any]:
         )
 
         return {
-            "pdf_bytes": pdf_bytes,  # cache in state for downstream nodes
+            "pdf_bytes": pdf_bytes,
             "domain": result.domain,
             "sub_domain": result.sub_domain,
             "classification_confidence": result.confidence,

@@ -72,52 +72,44 @@ def _build_chunks(
     return chunks
 
 
-def _embed_chunks(
+async def _embed_chunks(
     chunks: list[tuple[str, str]],
     model: str,
     api_key: str,
 ) -> list[tuple[str, list[float]]]:
-    """Call litellm.embedding() for each chunk, return (chunk_type, vector) pairs."""
+    """Call litellm.aembedding() for each chunk concurrently, return (chunk_type, vector) pairs."""
     import litellm  # type: ignore[import-untyped]
+    import asyncio
 
-    results: list[tuple[str, list[float]]] = []
-
-    for chunk_type, text in chunks:
-        response = litellm.embedding(
+    async def _embed_single(chunk_type: str, text: str) -> tuple[str, list[float]]:
+        response = await litellm.aembedding(
             model=model,
             input=[text],
             api_key=api_key,
             dimensions=1536,
         )
         vector: list[float] = response.data[0]["embedding"]
-        results.append((chunk_type, vector))
         log.debug(
             "embed_node.chunk_embedded",
             chunk_type=chunk_type,
             dims=len(vector),
         )
+        return chunk_type, vector
 
-    return results
+    tasks = [_embed_single(chunk_type, text) for chunk_type, text in chunks]
+    return await asyncio.gather(*tasks)
 
 
-def _store_embeddings(
+async def _store_embeddings(
     paper_id: str,
     embedded_chunks: list[tuple[str, list[float]]],
 ) -> None:
     """Persist embedding vectors to the ``embeddings`` table."""
     try:
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import Session
-
-        from pipeline.core.config import get_settings
+        from pipeline.db.session import get_db_context
         from pipeline.db.models import EmbeddingORM
 
-        settings = get_settings()
-        engine = create_engine(
-            settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
-        )
-
-        with Session(engine) as session:
+        async with get_db_context() as session:
             for chunk_type, vector in embedded_chunks:
                 row = EmbeddingORM(
                     id=uuid.uuid4(),
@@ -126,8 +118,7 @@ def _store_embeddings(
                     embedding=vector,
                 )
                 session.add(row)
-            session.commit()
-        engine.dispose()
+            await session.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("embed_store_failed", reason=str(exc))
 
@@ -137,7 +128,7 @@ def _store_embeddings(
 # ---------------------------------------------------------------------------
 
 
-def embed_node(state: PipelineState) -> dict[str, Any]:
+async def embed_node(state: PipelineState) -> dict[str, Any]:
     """Generate and store vector embeddings for semantic search.
 
     Reads from state
@@ -188,7 +179,7 @@ def embed_node(state: PipelineState) -> dict[str, Any]:
             return {"stage_statuses": stage_statuses, "errors": errors}
 
         # ── 2. Embed each chunk ──────────────────────────────────────────
-        embedded_chunks = _embed_chunks(chunks, model, api_key)
+        embedded_chunks = await _embed_chunks(chunks, model, api_key)
 
         # Approximate token usage: ~1 token per 4 chars
         approx_tokens = sum(len(t) // 4 for _, t in chunks)
@@ -196,7 +187,7 @@ def embed_node(state: PipelineState) -> dict[str, Any]:
 
         # ── 3. Store to DB ───────────────────────────────────────────────
         if paper_id:
-            _store_embeddings(paper_id, embedded_chunks)
+            await _store_embeddings(paper_id, embedded_chunks)
 
         stage_statuses[_STAGE] = StageStatus.COMPLETED
         default_bus.emit(

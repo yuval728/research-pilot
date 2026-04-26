@@ -93,8 +93,9 @@ class TelemetryCollector:
         UUID of the pipeline run.
     """
 
-    def __init__(self, run_id: str) -> None:
+    def __init__(self, run_id: str, paper_id: str | None = None) -> None:
         self.run_id = run_id
+        self.paper_id = paper_id
         self._records: list[TelemetryRecord] = []
 
     # ------------------------------------------------------------------
@@ -144,6 +145,10 @@ class TelemetryCollector:
             "tokens_by_stage": self.tokens_by_stage(),
         }
 
+    def set_paper_id(self, paper_id: str) -> None:
+        """Associate this run with a paper ID (Langfuse session_id)."""
+        self.paper_id = paper_id
+
     # ------------------------------------------------------------------
     # Langfuse integration
     # ------------------------------------------------------------------
@@ -164,11 +169,13 @@ class TelemetryCollector:
             if not lf:
                 return
 
-            # Langfuse v4 migration: create_event uses trace_context for linking.
+            # Langfuse SDK: use create_event with trace_context (consistent hyphens).
             lf.create_event(
                 name=f"{record.stage_name}.llm_call",
-                # Langfuse v4 requires trace IDs to be 32-character hex strings (no hyphens).
-                trace_context={"trace_id": record.run_id.replace("-", "")},
+                trace_context={
+                    "trace_id": record.run_id.replace("-", ""),
+                    "session_id": getattr(self, "paper_id", "").replace("-", ""),
+                },
                 input=record.input_tokens,
                 output=record.output_tokens,
                 metadata={

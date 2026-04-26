@@ -3,15 +3,23 @@ pipeline.graph.nodes.ingest
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ``ingest_node`` — first stage of the pipeline.
 
-Responsibilities
-----------------
-1. Accept input from state: PDF bytes, arXiv URL, or DOI.
-2. Fetch the PDF if not already in state (arXiv or DOI).
-3. Compute SHA-256 content hash; raise ``DuplicatePaperError`` if seen before.
-4. Upload raw PDF to Supabase Storage ``papers`` bucket.
-5. Create a ``PaperORM`` row in Postgres.
-6. Update state with ``pdf_storage_path`` and ``paper_id``.
-7. Emit ``STAGE_COMPLETED`` event on the default bus.
+Three execution paths
+---------------------
+1. **Full skip** — ``paper_id`` AND ``pdf_storage_path`` are already set
+   (e.g. ``PaperService.create_from_upload()`` uploaded the PDF already).
+   Nothing to do; return immediately.
+
+2. **Fetch-only** — ``paper_id`` is set but ``pdf_storage_path`` is None
+   (e.g. ``PaperService.create_from_arxiv()`` created the DB record but
+   deferred the PDF download).  Download + upload the PDF under the
+   *existing* ``paper_id`` so all storage paths and cache keys are stable.
+
+3. **Full ingestion** — neither is set (standalone / raw-bytes path).
+   Compute hash, check for duplicates, generate new UUID, upload PDF, write DB.
+
+This three-path design is the fix for both the cross-contamination bug
+(RC-3b) and the broken cache (RC-2a) — the ``paper_id`` is now always
+stable across the whole pipeline run.
 """
 
 from __future__ import annotations
@@ -42,13 +50,17 @@ def _compute_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _fetch_arxiv(arxiv_id: str) -> bytes:
+async def _fetch_arxiv(arxiv_id: str) -> bytes:
     """Download a PDF from arXiv by its identifier (e.g. ``'2301.00001'``)."""
     import arxiv  # type: ignore[import-untyped]
+    import asyncio
 
-    client = arxiv.Client()
-    search = arxiv.Search(id_list=[arxiv_id])
-    results = list(client.results(search))
+    def _search():
+        client = arxiv.Client()
+        search = arxiv.Search(id_list=[arxiv_id])
+        return list(client.results(search))
+
+    results = await asyncio.to_thread(_search)
 
     if not results:
         raise PDFFetchError(
@@ -56,19 +68,17 @@ def _fetch_arxiv(arxiv_id: str) -> bytes:
             source_url=f"https://arxiv.org/abs/{arxiv_id}",
         )
 
-    paper = results[0]
-    # arxiv library's download_pdf writes to disk; fetch the PDF directly instead
-    pdf_url = paper.pdf_url
-    return _fetch_url(pdf_url)
+    pdf_url = results[0].pdf_url
+    return await _fetch_url(pdf_url)
 
 
-def _fetch_url(url: str) -> bytes:
-    """Fetch raw bytes from *url* following redirects (for DOI / arXiv PDFs)."""
+async def _fetch_url(url: str) -> bytes:
+    """Fetch raw bytes from *url* following redirects."""
     import httpx
 
     try:
-        with httpx.Client(follow_redirects=True, timeout=60.0) as client:
-            resp = client.get(url)
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+            resp = await client.get(url)
             resp.raise_for_status()
             return resp.content
     except httpx.HTTPStatusError as exc:
@@ -84,42 +94,26 @@ def _fetch_url(url: str) -> bytes:
         ) from exc
 
 
-def _fetch_doi(doi: str) -> bytes:
+async def _fetch_doi(doi: str) -> bytes:
     """Resolve a DOI to its PDF via the CrossRef redirect."""
-    doi_url = f"https://doi.org/{doi}"
-    return _fetch_url(doi_url)
+    return await _fetch_url(f"https://doi.org/{doi}")
 
 
-def _check_duplicate(content_hash: str, paper_id_hint: str | None) -> None:
-    """Raise ``DuplicatePaperError`` if this content hash is already in the DB.
-
-    This is a best-effort sync check using a direct SQLAlchemy query.
-    In production this would be async; here we keep it sync to stay
-    compatible with LangGraph's synchronous node contract.
-    """
-    # Deferred import to avoid heavy DB setup at module import time
+async def _check_duplicate(content_hash: str) -> None:
+    """Raise ``DuplicatePaperError`` if this content hash is already in the DB."""
     try:
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
 
-        from pipeline.core.config import get_settings
+        from pipeline.db.session import get_db_context
 
-        settings = get_settings()
-        # Use sync URL (replace asyncpg/async driver with psycopg sync)
-        db_url = settings.supabase.db_url.get_secret_value()
-        sync_url = db_url.replace("+asyncpg", "").replace(
-            "postgresql+psycopg://", "postgresql+psycopg://"
-        )
-
-        engine = create_engine(sync_url, pool_pre_ping=True)
-        with engine.connect() as conn:
-            # Check via metadata JSONB field for content_hash
-            row = conn.execute(
+        async with get_db_context() as session:
+            res = await session.execute(
                 text(
                     "SELECT id FROM papers WHERE metadata->>'content_hash' = :h LIMIT 1"
                 ),
                 {"h": content_hash},
-            ).fetchone()
-        engine.dispose()
+            )
+            row = res.fetchone()
 
         if row is not None:
             raise DuplicatePaperError(
@@ -130,51 +124,42 @@ def _check_duplicate(content_hash: str, paper_id_hint: str | None) -> None:
     except DuplicatePaperError:
         raise
     except Exception as exc:  # noqa: BLE001
-        # DB unavailable in test/local environments — log and continue
         log.warning("duplicate_check_skipped", reason=str(exc))
 
 
-def _upload_pdf(pdf_bytes: bytes, storage_path: str) -> None:
+async def _upload_pdf(pdf_bytes: bytes, storage_path: str) -> None:
     """Upload pdf_bytes to Supabase Storage under *storage_path*."""
-    from pipeline.core.config import get_settings
+    from pipeline.db.engine import get_supabase_client
+    import asyncio
 
-    settings = get_settings()
-    from supabase import create_client  # type: ignore[import-untyped]
+    client = get_supabase_client()
 
-    client = create_client(
-        settings.supabase.url,
-        settings.supabase.service_role_key.get_secret_value(),
-    )
-    client.storage.from_(_PAPERS_BUCKET).upload(
-        path=storage_path,
-        file=pdf_bytes,
-        file_options={"content-type": "application/pdf"},
-    )
+    def _do_upload():
+        client.storage.from_(_PAPERS_BUCKET).upload(
+            path=storage_path,
+            file=pdf_bytes,
+            file_options={"content-type": "application/pdf"},
+        )
+
+    await asyncio.to_thread(_do_upload)
 
 
-def _create_paper_row(
+async def _create_paper_row(
     paper_id: str,
     source: str,
     storage_path: str,
     metadata: PaperMetadata | None,
     content_hash: str,
 ) -> None:
-    """Insert a ``PaperORM`` row synchronously."""
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session
-
-    from pipeline.core.config import get_settings
+    """Insert a ``PaperORM`` row asynchronously."""
+    from pipeline.db.session import get_db_context
     from pipeline.db.models import PaperORM
 
-    settings = get_settings()
-    db_url = settings.supabase.db_url.get_secret_value()
-
-    engine = create_engine(db_url, pool_pre_ping=True)
     meta_dict: dict[str, Any] = {"content_hash": content_hash}
     if metadata:
         meta_dict.update(metadata.model_dump(exclude_none=True))
 
-    with Session(engine) as session:
+    async with get_db_context() as session:
         row = PaperORM(
             id=uuid.UUID(paper_id),
             source=source,
@@ -182,8 +167,67 @@ def _create_paper_row(
             metadata_=meta_dict,
         )
         session.add(row)
-        session.commit()
-    engine.dispose()
+        await session.commit()
+
+
+async def _update_paper_storage_path(
+    paper_id: str, storage_path: str, content_hash: str
+) -> None:
+    """Update an existing paper record with its PDF storage path and content hash."""
+    try:
+        from sqlalchemy import text
+
+        from pipeline.db.session import get_db_context
+
+        import json
+
+        async with get_db_context() as session:
+            # Passing the dict as a single JSONB parameter is more robust than jsonb_build_object
+            await session.execute(
+                text(
+                    """
+                    UPDATE papers
+                    SET pdf_storage_path = :path,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:new_meta AS JSONB)
+                    WHERE id = :pid
+                    """
+                ),
+                {
+                    "path": storage_path,
+                    "new_meta": json.dumps({"content_hash": content_hash}),
+                    "pid": paper_id,
+                },
+            )
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ingest_node.db_update_skipped", reason=str(exc))
+
+
+async def _fetch_pdf_bytes(
+    metadata: PaperMetadata | None, run_id: str
+) -> tuple[bytes, str]:
+    """Fetch PDF bytes and return (pdf_bytes, source_value)."""
+    if metadata and metadata.arxiv_id:
+        return await _fetch_arxiv(metadata.arxiv_id), PaperSource.ARXIV_URL.value
+    elif metadata and metadata.doi:
+        return await _fetch_doi(metadata.doi), PaperSource.DOI.value
+    else:
+        raise StageError(
+            "No PDF bytes provided and no arXiv ID or DOI found in metadata.",
+            stage_name=_STAGE,
+            run_id=run_id,
+        )
+
+
+def _emit_completed(run_id: str, paper_id: str, storage_path: str) -> None:
+    default_bus.emit(
+        Event(
+            type=EventType.STAGE_COMPLETED,
+            run_id=run_id,
+            stage_name=_STAGE,
+            payload={"paper_id": paper_id, "storage_path": storage_path},
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -191,106 +235,104 @@ def _create_paper_row(
 # ---------------------------------------------------------------------------
 
 
-def ingest_node(state: PipelineState) -> dict[str, Any]:
+async def ingest_node(state: PipelineState) -> dict[str, Any]:
     """Ingest a research paper into the pipeline.
 
-    Reads from state
-    ----------------
-    - ``pdf_bytes`` — raw PDF already in memory (PDF upload path)
-    - ``paper_metadata`` — may contain ``arxiv_id`` or ``doi`` for fetching
-    - ``run_id`` — for event emission
-
-    Writes to state
-    ---------------
-    - ``pdf_bytes`` — populated if fetched remotely
-    - ``paper_id`` — newly created DB record UUID
-    - ``pdf_storage_path`` — path in Supabase Storage
-    - ``stage_statuses["ingest"]``
-    - ``errors`` — appended on failure
-
-    Raises
-    ------
-    StageError
-        If a non-recoverable error occurs (re-raises after updating state).
+    See module docstring for the three execution paths.
     """
     run_id = state["run_id"]
+    existing_paper_id: str | None = state.get("paper_id")
+    existing_storage_path: str | None = state.get("pdf_storage_path")
     metadata: PaperMetadata | None = state.get("paper_metadata")
     pdf_bytes: bytes | None = state.get("pdf_bytes")
     errors: list[str] = list(state.get("errors", []))
     stage_statuses: dict[str, StageStatus] = dict(state.get("stage_statuses", {}))
 
-    log.info("ingest_node.started", run_id=run_id)
+    log.info("ingest_node.started", run_id=run_id, existing_paper_id=existing_paper_id)
     stage_statuses[_STAGE] = StageStatus.RUNNING
 
+    # ── PATH 1: Fully pre-ingested — both paper_id and storage_path are set ──
+    if existing_paper_id and existing_storage_path:
+        log.info(
+            "ingest_node.skipped_already_ingested",
+            run_id=run_id,
+            paper_id=existing_paper_id,
+        )
+        stage_statuses[_STAGE] = StageStatus.COMPLETED
+        _emit_completed(run_id, existing_paper_id, existing_storage_path)
+        return {"stage_statuses": stage_statuses, "errors": errors}
+
     try:
-        # ── 1. Determine source and fetch PDF bytes ─────────────────────
-        source = PaperSource.PDF_UPLOAD.value
-        storage_path = state.get("pdf_storage_path")
+        # ── PATH 2: paper_id exists but PDF not yet fetched/uploaded ─────────
+        # PaperService.create_from_arxiv() creates the DB record but defers the
+        # PDF download.  We fetch it here under the EXISTING paper_id.
+        if existing_paper_id and not existing_storage_path:
+            paper_id = existing_paper_id
+            log.info(
+                "ingest_node.fetching_pdf_for_existing_paper",
+                run_id=run_id,
+                paper_id=paper_id,
+            )
 
-        # # If we already have a storage path and no bytes, we can skip ingestion
-        # # as it was likely handled by a pre-processing service (like in the demo).
-        # if pdf_bytes is None and storage_path:
-        #     log.info("ingest_node.skipping_fetch", reason="already_in_storage", storage_path=storage_path)
-        #     stage_statuses[_STAGE] = StageStatus.COMPLETED
-        #     return {
-        #         "stage_statuses": stage_statuses,
-        #     }
+            if pdf_bytes is None:
+                pdf_bytes, _ = await _fetch_pdf_bytes(metadata, run_id)
 
-        if pdf_bytes is None:
-            if metadata and metadata.arxiv_id:
-                source = PaperSource.ARXIV_URL.value
-                pdf_bytes = _fetch_arxiv(metadata.arxiv_id)
-            elif metadata and metadata.doi:
-                source = PaperSource.DOI.value
-                pdf_bytes = _fetch_doi(metadata.doi)
-            else:
-                raise StageError(
-                    "No PDF bytes provided and no arXiv ID or DOI found in metadata.",
-                    stage_name=_STAGE,
-                    run_id=run_id,
+            content_hash = _compute_sha256(pdf_bytes)
+            storage_path = f"{paper_id}/paper.pdf"
+
+            try:
+                await _upload_pdf(pdf_bytes, storage_path)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "ingest_node.upload_skipped", reason=str(exc), run_id=run_id
                 )
+                storage_path = f"local://{paper_id}/paper.pdf"
 
-        # ── 2. Compute content hash and check for duplicates ─────────────
+            await _update_paper_storage_path(paper_id, storage_path, content_hash)
+
+            stage_statuses[_STAGE] = StageStatus.COMPLETED
+            _emit_completed(run_id, paper_id, storage_path)
+            log.info(
+                "ingest_node.completed",
+                run_id=run_id,
+                paper_id=paper_id,
+                storage_path=storage_path,
+            )
+            return {
+                "paper_id": paper_id,
+                "pdf_bytes": pdf_bytes,
+                "pdf_storage_path": storage_path,
+                "stage_statuses": stage_statuses,
+                "errors": errors,
+            }
+
+        # ── PATH 3: Full ingestion from scratch ───────────────────────────────
+        if pdf_bytes is None:
+            pdf_bytes, source = await _fetch_pdf_bytes(metadata, run_id)
+        else:
+            source = PaperSource.PDF_UPLOAD.value
+
         content_hash = _compute_sha256(pdf_bytes)
-        _check_duplicate(content_hash, paper_id_hint=None)
+        await _check_duplicate(content_hash)
 
-        # ── 3. Generate paper_id and storage path ────────────────────────
         paper_id = str(uuid.uuid4())
         storage_path = f"{paper_id}/paper.pdf"
 
-        # ── 4. Upload to Supabase Storage ────────────────────────────────
         try:
-            _upload_pdf(pdf_bytes, storage_path)
+            await _upload_pdf(pdf_bytes, storage_path)
         except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "ingest_node.upload_skipped",
-                reason=str(exc),
-                run_id=run_id,
-            )
-            # Non-fatal in local/test environments — continue with local path
+            log.warning("ingest_node.upload_skipped", reason=str(exc), run_id=run_id)
             storage_path = f"local://{paper_id}/paper.pdf"
 
-        # ── 5. Persist paper record in DB ────────────────────────────────
         try:
-            _create_paper_row(paper_id, source, storage_path, metadata, content_hash)
+            await _create_paper_row(
+                paper_id, source, storage_path, metadata, content_hash
+            )
         except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "ingest_node.db_write_skipped",
-                reason=str(exc),
-                run_id=run_id,
-            )
+            log.warning("ingest_node.db_write_skipped", reason=str(exc), run_id=run_id)
 
-        # ── 6. Emit event ────────────────────────────────────────────────
         stage_statuses[_STAGE] = StageStatus.COMPLETED
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_COMPLETED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"paper_id": paper_id, "storage_path": storage_path},
-            )
-        )
-
+        _emit_completed(run_id, paper_id, storage_path)
         log.info(
             "ingest_node.completed",
             run_id=run_id,

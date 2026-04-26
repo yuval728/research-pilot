@@ -7,7 +7,7 @@ Responsibilities
 ----------------
 1. Works entirely from ``state["extraction"]`` — no PDF needed.
 2. Renders ``summarise_v1.j2`` with extraction JSON as context.
-3. Makes four separate LiteLLM calls — one per ``SummaryLevel``.
+3. Makes four **parallel** LiteLLM calls — one per ``SummaryLevel``.
 4. Stores all four ``SummaryOutput`` records in the ``outputs`` table.
 5. Updates state with ``summaries``.
 6. Emits ``STAGE_COMPLETED`` event.
@@ -15,22 +15,20 @@ Responsibilities
 
 from __future__ import annotations
 
-import json
+import asyncio
 import uuid
 from pathlib import Path
 from typing import Any
 
 import litellm  # type: ignore[import-untyped]
-from jinja2 import Environment, FileSystemLoader
-from pydantic import BaseModel, Field
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from jinja2 import Environment
+
 
 from pipeline.core.config import get_settings
 from pipeline.core.events import Event, EventType, default_bus
 from pipeline.core.logger import get_logger
 from pipeline.core.telemetry import TelemetryCollector, track_llm_call
-from pipeline.core.utils import extract_json
+
 from pipeline.db.models import OutputORM
 from pipeline.domains.ai_ml.schema import AiMlExtraction
 from pipeline.graph.state import PipelineState
@@ -44,41 +42,38 @@ log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Response schema
-# ---------------------------------------------------------------------------
-
-
-class SummaryResponse(BaseModel):
-    """Structured response for a paper summary."""
-
-    summary: str = Field(..., description="The generated summary text.")
-
-
-# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 
-def _render_prompt(extraction: AiMlExtraction, level: SummaryLevel) -> str:
+async def _render_prompt(
+    extraction: AiMlExtraction,
+    level: SummaryLevel,
+    paper_text: str | None = None,
+) -> str:
     """Render summarise_v1.j2 with the extraction data and requested level."""
-    env = Environment(
-        loader=FileSystemLoader(str(_PROMPT_PATH.parent)),
-        autoescape=False,
-    )
-    template = env.get_template(_PROMPT_PATH.name)
+    import json
+    import aiofiles  # type: ignore[import-untyped]
+
+    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
+        template_str = await f.read()
+
+    env = Environment(autoescape=False)
+    template = env.from_string(template_str)
     return template.render(
         extraction_json=json.dumps(extraction.model_dump(mode="json"), indent=2),
         level=level.value,
+        paper_text=paper_text,
     )
 
 
-def _call_gemini_summarise(
+async def _call_gemini_summarise_async(
     prompt: str,
     level: SummaryLevel,
     run_id: str,
     collector: TelemetryCollector,
 ) -> str:
-    """Call Gemini for one summary level, return the summary text."""
+    """Async wrapper: calls Gemini for one summary level, returns the summary text."""
     settings = get_settings()
     model = settings.gemini.default_model
 
@@ -87,38 +82,26 @@ def _call_gemini_summarise(
     with track_llm_call(
         collector, stage_name=f"{_STAGE}.{level.value}", model=model
     ) as ctx:
-        response = litellm.completion(
+        response = await litellm.acompletion(
             model=model,
             messages=messages,
             temperature=settings.gemini.temperature,
             max_tokens=2048,
             num_retries=3,
-            response_format=SummaryResponse,  # Force JSON mode
             api_key=settings.gemini.api_key.get_secret_value(),
         )
         ctx.set_response(response)
 
-    raw = (response.choices[0].message.content or "").strip()
-
-    try:
-        cleaned = extract_json(raw)
-        data = json.loads(cleaned)
-        validated = SummaryResponse.model_validate(data)
-        return validated.summary
-    except Exception as exc:
-        log.warning("summarise_node.parse_failed", error=str(exc), raw=raw)
-        return raw.strip()
+    content = (response.choices[0].message.content or "").strip()
+    return content if content else f"Summary unavailable for level: {level.value}"
 
 
-def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> None:
+async def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> None:
     """Persist all SummaryOutput records to the ``outputs`` table."""
     try:
-        settings = get_settings()
-        engine = create_engine(
-            settings.supabase.db_url.get_secret_value(), pool_pre_ping=True
-        )
+        from pipeline.db.session import get_db_context
 
-        with Session(engine) as session:
+        async with get_db_context() as session:
             for summary in summaries:
                 row = OutputORM(
                     id=uuid.uuid4(),
@@ -127,8 +110,7 @@ def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> None:
                     storage_path=f"inline:summary_{summary.level.value}",
                 )
                 session.add(row)
-            session.commit()
-        engine.dispose()
+            await session.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("summarise_store_failed", reason=str(exc))
 
@@ -138,8 +120,11 @@ def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def summarise_node(state: PipelineState) -> dict[str, Any]:
+async def summarise_node(state: PipelineState) -> dict[str, Any]:
     """Generate four summary variants from the structured extraction.
+
+    All four LLM calls are made in parallel via ``asyncio.gather`` to
+    reduce wall-clock time.
 
     Reads from state
     ----------------
@@ -170,13 +155,45 @@ def summarise_node(state: PipelineState) -> dict[str, Any]:
         return {"stage_statuses": stage_statuses, "errors": errors, "summaries": []}
 
     try:
-        collector = TelemetryCollector(run_id=run_id)
+        # Extract text from PDF if available to improve summary accuracy (RC-1b)
+        pdf_bytes: bytes | None = state.get("pdf_bytes")
+        paper_text: str | None = None
+        if pdf_bytes:
+            try:
+                import io
+                import pypdf
+
+                def _extract():
+                    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+                    # Get first 3 pages or ~8000 chars for context
+                    text_parts = []
+                    for i in range(min(len(reader.pages), 3)):
+                        text_parts.append(reader.pages[i].extract_text() or "")
+                    return "\n".join(text_parts)[:8000]
+
+                paper_text = await asyncio.to_thread(_extract)
+                log.debug("summarise_node.text_extracted", length=len(paper_text or ""))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("summarise_node.text_extraction_failed", reason=str(exc))
+
+        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
+        levels = list(SummaryLevel)
+
+        # Render prompts sequentially as it's fast
+        prompts = [
+            await _render_prompt(extraction, level, paper_text=paper_text)
+            for level in levels
+        ]
+
+        # ── Parallel LLM calls: all 4 summary levels at once ─────────────
+        tasks = [
+            _call_gemini_summarise_async(prompt, level, run_id, collector)
+            for prompt, level in zip(prompts, levels)
+        ]
+        contents = await asyncio.gather(*tasks)
+
         summaries: list[SummaryOutput] = []
-
-        for level in SummaryLevel:
-            prompt = _render_prompt(extraction, level)
-            content = _call_gemini_summarise(prompt, level, run_id, collector)
-
+        for level, content in zip(levels, contents):
             if not content:
                 log.warning(
                     "summarise_node.empty_response",
@@ -202,7 +219,7 @@ def summarise_node(state: PipelineState) -> dict[str, Any]:
         token_usage[_STAGE] = collector.total_tokens
 
         if paper_id:
-            _store_summaries(paper_id, summaries)
+            await _store_summaries(paper_id, summaries)
 
         stage_statuses[_STAGE] = StageStatus.COMPLETED
         default_bus.emit(
