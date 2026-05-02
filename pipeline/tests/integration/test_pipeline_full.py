@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from pipeline.graph.pipeline import research_pipeline
-from pipeline.graph.state import make_initial_state
-from pipeline.models.paper import PaperMetadata
-from pipeline.models.run import StageStatus
+from src.graph.pipeline import research_pipeline
+from src.graph.state import make_initial_state
+from src.models.paper import PaperMetadata
+from src.models.run import StageStatus
 
 # Mark all tests in this file as integration tests
 pytestmark = pytest.mark.integration

@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pipeline.core.events import Event, EventBus, EventType, default_bus
+from src.core.events import Event, EventBus, EventType, default_bus
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +243,6 @@ class TestDefaultBus:
         assert isinstance(default_bus, EventBus)
 
     def test_default_bus_is_singleton(self):
-        from pipeline.core import events as ev_mod
+        from src.core import events as ev_mod
 
         assert ev_mod.default_bus is default_bus

@@ -90,13 +90,13 @@ def _section(title: str) -> None:
 
 # ── import pipeline internals ───────────────────────────────────────────────
 try:
-    from pipeline.core.config import get_settings
-    from pipeline.db.session import get_db_context
-    from pipeline.graph.pipeline import research_pipeline
-    from pipeline.graph.state import PipelineState, make_initial_state
-    from pipeline.models.paper import PaperMetadata, PaperSource
-    from pipeline.models.run import StageStatus
-    from pipeline.services.paper_service import PaperService
+    from src.core.config import get_settings
+    from src.db.session import get_db_context
+    from src.graph.pipeline import research_pipeline
+    from src.graph.state import PipelineState, make_initial_state
+    from src.models.paper import PaperMetadata, PaperSource
+    from src.models.run import StageStatus
+    from src.services.paper_service import PaperService
 except ImportError as exc:
     print(f"\n{RED}Import error: {exc}")
     print(
@@ -261,7 +261,7 @@ async def run_scenario(scenario: Scenario) -> PipelineState:
         else:
             # Synthetic paper with user-supplied metadata
             _ok("Creating synthetic paper record …")
-            from pipeline.db.models import PaperORM
+            from src.db.models import PaperORM
             from datetime import datetime, timezone
             import uuid as _uuid
 
@@ -280,7 +280,7 @@ async def run_scenario(scenario: Scenario) -> PipelineState:
             db.add(orm)
             await db.commit()
             await db.refresh(orm)
-            from pipeline.models.paper import Paper
+            from src.models.paper import Paper
 
             paper = Paper(
                 id=orm.id,

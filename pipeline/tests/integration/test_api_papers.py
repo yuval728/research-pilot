@@ -17,7 +17,7 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from pipeline.models.paper import Paper, PaperSource
+from src.models.paper import Paper, PaperSource
 
 
 @pytest.fixture

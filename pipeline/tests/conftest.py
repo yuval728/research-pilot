@@ -35,14 +35,14 @@ os.environ["SUPABASE_ANON_KEY"] = "test-anon-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = "test-lf-pub"
 os.environ["LANGFUSE_SECRET_KEY"] = "test-lf-sec"
 
-from pipeline.domains.ai_ml.schema import (
+from src.domains.ai_ml.schema import (
     AiMlExtraction,
     ArchitectureComponent,
     DatasetInfo,
     MetricResult,
 )
-from pipeline.models.extraction import ExtractionResult
-from pipeline.models.paper import Paper, PaperMetadata, PaperSource
+from src.models.extraction import ExtractionResult
+from src.models.paper import Paper, PaperMetadata, PaperSource
 
 # ---------------------------------------------------------------------------
 # pytest-asyncio mode
@@ -68,7 +68,7 @@ async def test_db() -> AsyncGenerator[AsyncSession, None]:
     engine = create_async_engine(_SQLITE_URL, echo=False)
 
     # Import ORM Base only inside fixture to avoid top-level DB connection
-    from pipeline.db.models import Base  # noqa: PLC0415
+    from src.db.models import Base  # noqa: PLC0415
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -99,7 +99,7 @@ def test_client() -> Generator[TestClient, None, None]:
     * ``domain_registry`` — auto_discover is a no-op.
     * Sentry SDK init   — no-op.
     """
-    from pipeline.api.main import create_app  # noqa: PLC0415
+    from src.api.main import create_app  # noqa: PLC0415
 
     fake_settings = _make_fake_settings()
 
@@ -120,7 +120,7 @@ def test_client() -> Generator[TestClient, None, None]:
         mock_registry.auto_discover = MagicMock()
 
         app = create_app()
-        from pipeline.api.dependencies import get_current_user
+        from src.api.dependencies import get_current_user
 
         app.dependency_overrides[get_current_user] = lambda: "test-user-id"
 

@@ -19,8 +19,8 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from pipeline.core.exceptions import LLMRateLimitError, LLMTimeoutError
-from pipeline.core.retry import (
+from src.core.exceptions import LLMRateLimitError, LLMTimeoutError
+from src.core.retry import (
     _HttpError,
     check_http_status,
     http_retry,

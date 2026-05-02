@@ -99,13 +99,13 @@ def _block(text: str, label: str | None = None, max_lines: int | None = None) ->
 
 # ── imports ──────────────────────────────────────────────────────────────────
 try:
-    from pipeline.core.config import get_settings
-    from pipeline.db.session import get_db_context
-    from pipeline.graph.pipeline import research_pipeline
-    from pipeline.graph.state import PipelineState, make_initial_state
-    from pipeline.models.output import DiagramType, SummaryLevel
-    from pipeline.models.run import StageStatus
-    from pipeline.services.paper_service import PaperService
+    from src.core.config import get_settings
+    from src.db.session import get_db_context
+    from src.graph.pipeline import research_pipeline
+    from src.graph.state import PipelineState, make_initial_state
+    from src.models.output import DiagramType, SummaryLevel
+    from src.models.run import StageStatus
+    from src.services.paper_service import PaperService
 except ImportError as exc:
     print(f"\n{RED}Import error: {exc}")
     print("Run from pipeline/ directory:  uv run python pipeline_demo.py{RESET}\n")

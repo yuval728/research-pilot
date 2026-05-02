@@ -16,7 +16,7 @@ import uuid
 from unittest.mock import patch
 
 
-from pipeline.core.exceptions import (
+from src.core.exceptions import (
     DependencyNotMetError,
     DuplicatePaperError,
     EmbeddingError,
@@ -34,7 +34,7 @@ from pipeline.core.exceptions import (
     StorageError,
     TokenBudgetExceededError,
 )
-from pipeline.graph.state import make_initial_state
+from src.graph.state import make_initial_state
 
 
 # ===========================================================================
@@ -310,7 +310,7 @@ class TestMakeInitialState:
         assert s["run_id"]  # state is valid
 
     def test_paper_metadata_passed_through(self):
-        from pipeline.models.paper import PaperMetadata  # noqa: PLC0415
+        from src.models.paper import PaperMetadata  # noqa: PLC0415
 
         meta = PaperMetadata(title="Test Paper")
         s = make_initial_state(paper_metadata=meta)
@@ -326,7 +326,7 @@ class TestConfigSettings:
     """Verify settings factory and singleton cache work correctly."""
 
     def test_get_settings_returns_same_object(self):
-        from pipeline.core.config import get_settings  # noqa: PLC0415
+        from src.core.config import get_settings  # noqa: PLC0415
 
         get_settings.cache_clear()
         with patch.dict(
@@ -349,7 +349,7 @@ class TestConfigSettings:
         get_settings.cache_clear()
 
     def test_cache_clear_produces_new_object(self):
-        from pipeline.core.config import get_settings  # noqa: PLC0415
+        from src.core.config import get_settings  # noqa: PLC0415
 
         get_settings.cache_clear()
         env = {
@@ -371,7 +371,7 @@ class TestConfigSettings:
         get_settings.cache_clear()
 
     def test_environment_default_is_development(self):
-        from pipeline.core.config import get_settings  # noqa: PLC0415
+        from src.core.config import get_settings  # noqa: PLC0415
 
         get_settings.cache_clear()
         env = {

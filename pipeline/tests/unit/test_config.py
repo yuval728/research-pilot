@@ -20,7 +20,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from pipeline.core.config import (
+from src.core.config import (
     AppSettings,
     _build_settings,
     get_settings,

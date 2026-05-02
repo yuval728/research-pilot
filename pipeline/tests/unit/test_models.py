@@ -20,14 +20,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from pipeline.domains.ai_ml.schema import (
+from src.domains.ai_ml.schema import (
     AiMlExtraction,
     ArchitectureComponent,
     DatasetInfo,
     MetricResult,
 )
-from pipeline.models.extraction import ExtractionResult
-from pipeline.models.output import (
+from src.models.extraction import ExtractionResult
+from src.models.output import (
     CodeOutput,
     DiagramOutput,
     DiagramType,
@@ -36,13 +36,13 @@ from pipeline.models.output import (
     SummaryLevel,
     SummaryOutput,
 )
-from pipeline.models.paper import (
+from src.models.paper import (
     Paper,
     PaperCreate,
     PaperMetadata,
     PaperSource,
 )
-from pipeline.models.run import (
+from src.models.run import (
     PipelineRun,
     RunStatus,
     StageResult,

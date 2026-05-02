@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline.graph.edges import (
+from src.graph.edges import (
     CLASSIFICATION_CONFIDENCE_THRESHOLD,
     THEORY_DOMAIN_KEYWORDS,
     after_extract_route,
@@ -27,8 +27,8 @@ from pipeline.graph.edges import (
     should_continue_after_classify,
     should_run_codegen,
 )
-from pipeline.graph.state import PipelineState, make_initial_state
-from pipeline.models.run import StageStatus
+from src.graph.state import PipelineState, make_initial_state
+from src.models.run import StageStatus
 
 
 # ---------------------------------------------------------------------------

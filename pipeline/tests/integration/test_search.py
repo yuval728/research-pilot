@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from pipeline.models.paper import Paper, PaperSource
+from src.models.paper import Paper, PaperSource
 
 
 def test_search_papers(test_client: TestClient):

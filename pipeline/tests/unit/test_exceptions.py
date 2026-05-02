@@ -12,7 +12,7 @@ Tests verify:
 
 import pytest
 
-from pipeline.core.exceptions import (
+from src.core.exceptions import (
     DependencyNotMetError,
     DuplicatePaperError,
     EmbeddingError,

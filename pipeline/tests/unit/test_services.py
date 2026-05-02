@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pipeline.models.paper import Paper
-from pipeline.models.run import PipelineRun, StageResult
+from src.models.paper import Paper
+from src.models.run import PipelineRun, StageResult
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ class TestPaperServiceCreateFromUpload:
             with patch(
                 "pipeline.services.paper_service.PaperORM", return_value=paper_orm
             ):
-                from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+                from src.services.paper_service import PaperService  # noqa: PLC0415
 
                 svc = PaperService(db)
                 paper = await svc.create_from_upload(pdf_bytes, "paper.pdf")
@@ -129,7 +129,7 @@ class TestPaperServiceCreateFromUpload:
 
     @pytest.mark.asyncio
     async def test_non_pdf_filename_raises(self, pdf_bytes):
-        from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+        from src.services.paper_service import PaperService  # noqa: PLC0415
 
         with patch(
             "pipeline.services.paper_service.get_settings",
@@ -142,7 +142,7 @@ class TestPaperServiceCreateFromUpload:
 
     @pytest.mark.asyncio
     async def test_empty_bytes_raises(self):
-        from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+        from src.services.paper_service import PaperService  # noqa: PLC0415
 
         with patch(
             "pipeline.services.paper_service.get_settings",
@@ -165,7 +165,7 @@ class TestPaperServiceGetPaper:
             "pipeline.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
-            from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+            from src.services.paper_service import PaperService  # noqa: PLC0415
 
             svc = PaperService(db)
             paper = await svc.get_paper(paper_id)
@@ -181,7 +181,7 @@ class TestPaperServiceGetPaper:
             "pipeline.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
-            from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+            from src.services.paper_service import PaperService  # noqa: PLC0415
 
             svc = PaperService(db)
             with pytest.raises(ValueError, match="not found"):
@@ -203,7 +203,7 @@ class TestPaperServiceListPapers:
             "pipeline.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
-            from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+            from src.services.paper_service import PaperService  # noqa: PLC0415
 
             svc = PaperService(db)
             papers = await svc.list_papers()
@@ -222,7 +222,7 @@ class TestPaperServiceListPapers:
             "pipeline.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
-            from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+            from src.services.paper_service import PaperService  # noqa: PLC0415
 
             svc = PaperService(db)
             papers = await svc.list_papers()
@@ -244,7 +244,7 @@ class TestPaperServiceDeletePaper:
             ),
             patch("anyio.to_thread.run_sync", new_callable=AsyncMock),
         ):
-            from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+            from src.services.paper_service import PaperService  # noqa: PLC0415
 
             svc = PaperService(db)
             svc._supabase = MagicMock()  # skip lazy init
@@ -261,7 +261,7 @@ class TestPaperServiceDeletePaper:
             "pipeline.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
-            from pipeline.services.paper_service import PaperService  # noqa: PLC0415
+            from src.services.paper_service import PaperService  # noqa: PLC0415
 
             svc = PaperService(db)
             # Should not raise
@@ -298,7 +298,7 @@ class TestPipelineServiceTriggerRun:
         ):
             mock_loop.return_value.create_task = MagicMock()
 
-            from pipeline.services.pipeline_service import PipelineService  # noqa: PLC0415
+            from src.services.pipeline_service import PipelineService  # noqa: PLC0415
 
             svc = PipelineService(db)
             result = await svc.trigger_run(paper_id)
@@ -311,7 +311,7 @@ class TestPipelineServiceTriggerRun:
         db = AsyncMock()
         db.get = AsyncMock(return_value=None)
 
-        from pipeline.services.pipeline_service import PipelineService  # noqa: PLC0415
+        from src.services.pipeline_service import PipelineService  # noqa: PLC0415
 
         svc = PipelineService(db)
         with pytest.raises(ValueError, match="not found"):
@@ -329,7 +329,7 @@ class TestPipelineServiceGetRunStatus:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result_mock)
 
-        from pipeline.services.pipeline_service import PipelineService  # noqa: PLC0415
+        from src.services.pipeline_service import PipelineService  # noqa: PLC0415
 
         svc = PipelineService(db)
         run = await svc.get_run_status(run_id)
@@ -344,7 +344,7 @@ class TestPipelineServiceGetRunStatus:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result_mock)
 
-        from pipeline.services.pipeline_service import PipelineService  # noqa: PLC0415
+        from src.services.pipeline_service import PipelineService  # noqa: PLC0415
 
         svc = PipelineService(db)
         with pytest.raises(ValueError, match="not found"):
@@ -369,7 +369,7 @@ class TestPipelineServiceGetStageResult:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result_mock)
 
-        from pipeline.services.pipeline_service import PipelineService  # noqa: PLC0415
+        from src.services.pipeline_service import PipelineService  # noqa: PLC0415
 
         svc = PipelineService(db)
         stage = await svc.get_stage_result(run_id, "extract")
@@ -385,7 +385,7 @@ class TestPipelineServiceGetStageResult:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result_mock)
 
-        from pipeline.services.pipeline_service import PipelineService  # noqa: PLC0415
+        from src.services.pipeline_service import PipelineService  # noqa: PLC0415
 
         svc = PipelineService(db)
         with pytest.raises(ValueError, match="not found"):
@@ -410,7 +410,7 @@ class TestExportServiceGetOutputBundle:
             "pipeline.services.export_service.get_settings",
             return_value=_fake_settings(),
         ):
-            from pipeline.services.export_service import ExportService  # noqa: PLC0415
+            from src.services.export_service import ExportService  # noqa: PLC0415
 
             svc = ExportService(db)
             bundle = await svc.get_output_bundle(paper_id)
@@ -438,7 +438,7 @@ class TestExportServiceGetOutputBundle:
             "pipeline.services.export_service.get_settings",
             return_value=_fake_settings(),
         ):
-            from pipeline.services.export_service import ExportService  # noqa: PLC0415
+            from src.services.export_service import ExportService  # noqa: PLC0415
 
             svc = ExportService(db)
             bundle = await svc.get_output_bundle(paper_id)
@@ -463,7 +463,7 @@ class TestExportServiceGetOutputBundle:
             "pipeline.services.export_service.get_settings",
             return_value=_fake_settings(),
         ):
-            from pipeline.services.export_service import ExportService  # noqa: PLC0415
+            from src.services.export_service import ExportService  # noqa: PLC0415
 
             svc = ExportService(db)
             bundle = await svc.get_output_bundle(paper_id)

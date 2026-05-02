@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline.core.telemetry import (
+from src.core.telemetry import (
     TelemetryCollector,
     TelemetryRecord,
     track_llm_call,
