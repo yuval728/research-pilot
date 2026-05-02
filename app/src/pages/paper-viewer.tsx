@@ -19,6 +19,8 @@ export default function PaperViewerPage() {
   const navigate = useNavigate();
   const [paper, setPaper] = useState<Paper | null>(null);
   const [bundle, setBundle] = useState<OutputBundle | null>(null);
+  const [codeSource, setCodeSource] = useState('');
+  const [reportMarkdown, setReportMarkdown] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -27,10 +29,16 @@ export default function PaperViewerPage() {
       try {
         const [paperData, bundleData] = await Promise.all([
           papersApi.getPaper(id),
-          papersApi.getOutputBundle(id)
+          papersApi.getOutputBundle(id),
+        ]);
+        const [codeData, reportData] = await Promise.allSettled([
+          papersApi.getCodeSource(id),
+          papersApi.getReportMarkdown(id),
         ]);
         setPaper(paperData);
         setBundle(bundleData);
+        if (codeData.status === 'fulfilled') setCodeSource(codeData.value);
+        if (reportData.status === 'fulfilled') setReportMarkdown(reportData.value);
       } catch (error) {
         console.error(error);
       } finally {
@@ -128,11 +136,11 @@ export default function PaperViewerPage() {
                 <DiagramViewer dsl={bundle.diagrams[0].dsl_code} type="ARCHITECTURE" />
               </TabsContent>
               <TabsContent value="code" className="mt-0">
-                <CodeViewer code={mockCode} syntheticData={bundle.code?.synthetic_data_description || ''} />
+                <CodeViewer code={codeSource || bundle.code?.python_path || ''} syntheticData={bundle.code?.synthetic_data_description || ''} />
               </TabsContent>
               <TabsContent value="report" className="mt-0">
                 <div className="prose prose-invert max-w-none markdown-body">
-                  <Markdown>{mockReport}</Markdown>
+                  <Markdown>{reportMarkdown || bundle.report?.markdown_path || ''}</Markdown>
                 </div>
               </TabsContent>
             </div>
@@ -172,52 +180,4 @@ export default function PaperViewerPage() {
   );
 }
 
-const mockCode = `import torch
-import torch.nn as nn
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
-        super(MultiHeadAttention, self).__init__()
-        assert d_model % num_heads == 0
-
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-
-        self.W_q = nn.Linear(d_model, d_model)
-        self.W_k = nn.Linear(d_model, d_model)
-        self.W_v = nn.Linear(d_model, d_model)
-        self.W_o = nn.Linear(d_model, d_model)
-
-    def scaled_dot_product_attention(self, Q, K, V, mask=None):
-        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
-        if mask is not None:
-            attn_scores = attn_scores.masked_fill(mask == 0, -1e9)
-        attn_probs = torch.softmax(attn_scores, dim=-1)
-        output = torch.matmul(attn_probs, V)
-        return output, attn_probs
-
-    def forward(self, Q, K, V, mask=None):
-        # Implementation of multi-head attention...
-        pass`;
-
-const mockReport = `
-# Analysis Report: Attention Is All You Need
-
-## Executive Summary
-The Transformer architecture represents a paradigm shift in sequence modeling, moving away from recurrent and convolutional layers in favor of a pure attention-based mechanism. This allows for significantly more parallelization during training and has led to state-of-the-art performance in machine translation tasks.
-
-## Key Findings
-1. **Self-Attention Efficiency**: The self-attention mechanism reduces the path length between any two positions in a sequence to a constant O(1), facilitating the learning of long-range dependencies.
-2. **Parallelization**: Unlike RNNs, which require sequential processing, Transformers allow for parallel computation across the entire sequence length.
-3. **Multi-Head Attention**: By using multiple attention heads, the model can simultaneously focus on different aspects of the input (e.g., syntactic vs. semantic relationships).
-
-## Architecture Deep Dive
-The model consists of an encoder and a decoder, each composed of a stack of identical layers. Each layer has two sub-layers: a multi-head self-attention mechanism and a simple, position-wise fully connected feed-forward network.
-
-### Encoder
-The encoder maps an input sequence of symbol representations to a sequence of continuous representations.
-
-### Decoder
-The decoder generates an output sequence of symbols one element at a time, using the encoder's output and previously generated symbols.
-`;
+// Paper code and report are rendered from the `bundle` fetched from the backend

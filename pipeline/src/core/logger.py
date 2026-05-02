@@ -31,13 +31,15 @@ if TYPE_CHECKING:
 _configured = False
 
 
-def _configure_structlog(log_level: str = "INFO", *, pretty: bool = False) -> None:
+def _configure_structlog(
+    log_level: str = "INFO", *, pretty: bool = False, force: bool = False
+) -> None:
     """Configure structlog processors and stdlib integration.
 
     Safe to call multiple times — subsequent calls are no-ops.
     """
     global _configured
-    if _configured:
+    if _configured and not force:
         return
 
     shared_processors: list[structlog.types.Processor] = [
@@ -97,7 +99,9 @@ def _configure_structlog(log_level: str = "INFO", *, pretty: bool = False) -> No
     _configured = True
 
 
-def setup_logging(log_level: str = "INFO", *, pretty: bool | None = None) -> None:
+def setup_logging(
+    log_level: str = "INFO", *, pretty: bool | None = None, force: bool = True
+) -> None:
     """Initialise structlog.
 
     Called once at application startup (e.g. from FastAPI lifespan or pipeline
@@ -113,7 +117,7 @@ def setup_logging(log_level: str = "INFO", *, pretty: bool | None = None) -> Non
     """
     if pretty is None:
         pretty = sys.stdout.isatty()
-    _configure_structlog(log_level=log_level, pretty=pretty)
+    _configure_structlog(log_level=log_level, pretty=pretty, force=force)
 
 
 def get_logger(name: str) -> FilteringBoundLogger:
@@ -128,5 +132,5 @@ def get_logger(name: str) -> FilteringBoundLogger:
         Typically ``__name__`` of the calling module.
     """
     if not _configured:
-        setup_logging()
+        setup_logging(force=False)
     return structlog.get_logger(name)

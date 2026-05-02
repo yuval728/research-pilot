@@ -10,6 +10,7 @@ route handlers.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -17,10 +18,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import get_settings
+from src.core.logger import get_logger
 from src.db.session import SessionLocal
 from src.services import ExportService, PaperService, PipelineService
 
 settings = get_settings()
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Database
@@ -69,6 +72,16 @@ ExportServiceDep = Annotated[ExportService, Depends(get_export_service)]
 # ---------------------------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
+def get_auth_client():
+    from supabase import create_client
+
+    return create_client(
+        settings.supabase.url,
+        settings.supabase.anon_key.get_secret_value(),
+    )
+
+
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)],
 ) -> str:
@@ -78,18 +91,17 @@ async def get_current_user(
     """
     token = credentials.credentials
     try:
-        import jwt  # PyJWT — supabase-py bundles it
-
-        decoded = jwt.decode(
-            token,
-            settings.supabase.anon_key.get_secret_value(),
-            algorithms=["HS256"],
-            audience="authenticated",
-            options={"verify_exp": True},
-        )
-        user_id: str = decoded["sub"]
-        return user_id
+        supabase = get_auth_client()
+        user_response = supabase.auth.get_user(token)
+        if not user_response or not user_response.user:
+            raise ValueError("No user found in token")
+        return user_response.user.id
     except Exception as exc:
+        logger.warning(
+            "auth_failed",
+            error=type(exc).__name__,
+            message=str(exc),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

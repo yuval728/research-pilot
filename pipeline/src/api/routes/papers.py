@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from src.api.dependencies import (
@@ -166,3 +167,43 @@ async def get_paper_outputs(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
+
+
+@router.get(
+    "/{paper_id}/outputs/report.md",
+    response_class=PlainTextResponse,
+    summary="Download the generated report markdown",
+)
+async def get_report_markdown(
+    paper_id: uuid.UUID,
+    export_service: ExportServiceDep,
+    _user: CurrentUserDep,
+) -> str:
+    return await export_service.get_report_markdown(paper_id)
+
+
+@router.get(
+    "/{paper_id}/outputs/code.py",
+    response_class=PlainTextResponse,
+    summary="Download the generated Python code",
+)
+async def get_code_source(
+    paper_id: uuid.UUID,
+    export_service: ExportServiceDep,
+    _user: CurrentUserDep,
+) -> str:
+    data = await export_service.get_code_file(paper_id)
+    return data.decode("utf-8")
+
+
+@router.get(
+    "/{paper_id}/outputs/notebook.ipynb",
+    summary="Download the generated notebook",
+)
+async def get_notebook(
+    paper_id: uuid.UUID,
+    export_service: ExportServiceDep,
+    _user: CurrentUserDep,
+) -> Response:
+    data = await export_service.get_notebook(paper_id)
+    return Response(content=data, media_type="application/x-ipynb+json")

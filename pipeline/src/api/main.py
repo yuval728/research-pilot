@@ -17,7 +17,6 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
@@ -43,12 +42,13 @@ from src.core.exceptions import (
     StageError,
     StorageError,
 )
+from src.core.logger import get_logger, setup_logging
 from src.db.session import engine
 from src.domains.registry import registry as domain_registry
 
 from .routes import health_router, papers_router, pipeline_router, search_router
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 settings = get_settings()
 
 # ---------------------------------------------------------------------------
@@ -85,28 +85,37 @@ def _http_status_for(exc: ResearchPilotError) -> int:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    global logger
+
+    setup_logging(
+        log_level=settings.log_level,
+        pretty=(settings.environment == "development"),
+        force=True,
+    )
+    logger = get_logger(__name__)
+
     # ---- startup ----
-    logger.info("startup: discovering domain plugins")
+    logger.info("startup", step="discover_plugins")
     domain_registry.auto_discover()
 
     # Warm the connection pool by making a trivial connection
-    logger.info("startup: warming database connection pool")
+    logger.info("startup", step="warm_db_pool")
     try:
         import sqlalchemy
 
         async with engine.connect() as conn:
             await conn.execute(sqlalchemy.text("SELECT 1"))
     except Exception:  # noqa: BLE001
-        logger.warning("startup: database pool warm-up failed — continuing anyway")
+        logger.warning("startup", step="warm_db_pool_failed")
 
-    logger.info("startup: complete, environment=%s", settings.environment)
+    logger.info("startup", step="complete", environment=settings.environment)
 
     yield  # ← application is running
 
     # ---- shutdown ----
-    logger.info("shutdown: disposing database engine")
+    logger.info("shutdown", step="disposing_engine")
     await engine.dispose()
-    logger.info("shutdown: complete")
+    logger.info("shutdown", step="complete")
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +128,7 @@ def create_app() -> FastAPI:
 
     # Sentry — initialise before creating the app so the ASGI middleware
     # captures errors thrown during startup.
+    sentry_dsn = None
     if settings.environment != "development" or settings.sentry_dsn:
         sentry_dsn = (
             settings.sentry_dsn.get_secret_value() if settings.sentry_dsn else None
@@ -182,10 +192,10 @@ def create_app() -> FastAPI:
             headers["Retry-After"] = str(int(exc.retry_after))
 
         logger.warning(
-            "research_pilot_error path=%s error=%s message=%s",
-            request.url.path,
-            type(exc).__name__,
-            exc.message,
+            "research_pilot_error",
+            path=request.url.path,
+            error=type(exc).__name__,
+            message=exc.message,
         )
 
         return JSONResponse(
@@ -199,7 +209,7 @@ def create_app() -> FastAPI:
     async def unhandled_exception_handler(
         request: Request, exc: Exception
     ) -> JSONResponse:
-        logger.exception("unhandled_exception path=%s", request.url.path)
+        logger.exception("unhandled_exception", path=request.url.path, exc=exc)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={

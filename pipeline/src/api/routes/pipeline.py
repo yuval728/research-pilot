@@ -12,6 +12,9 @@ from fastapi import APIRouter, HTTPException, status
 
 from src.api.dependencies import CurrentUserDep, PipelineServiceDep
 from src.models.run import PipelineRun, StageResult
+from fastapi.responses import StreamingResponse
+import json
+import asyncio
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
@@ -105,3 +108,44 @@ async def get_stage_result(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
+
+
+@router.get(
+    "/runs/{run_id}/stream",
+    summary="Stream pipeline run updates (SSE)",
+    description="Server-sent events stream emitting run status updates for the given run_id.",
+)
+async def stream_run_status(
+    run_id: uuid.UUID,
+    pipeline_service: PipelineServiceDep,
+    _user: CurrentUserDep,
+):
+    async def event_generator():
+        last_payload: dict | None = None
+        try:
+            while True:
+                try:
+                    run = await pipeline_service.get_run_status(run_id)
+                    payload = {
+                        "id": str(run.id),
+                        "status": str(run.status),
+                        "stages": {
+                            k: {"status": str(v.status)} for k, v in run.stages.items()
+                        },
+                        "updated_at": run.created_at.isoformat()
+                        if hasattr(run, "created_at")
+                        else None,
+                    }
+                    if payload != last_payload:
+                        last_payload = payload
+                        yield f"data: {json.dumps(payload)}\n\n"
+                    if str(run.status) in ("SUCCESS", "FAILED", "CANCELLED"):
+                        break
+                except Exception:
+                    # On errors, continue polling; don't break the stream immediately
+                    pass
+                await asyncio.sleep(1)
+        finally:
+            return
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

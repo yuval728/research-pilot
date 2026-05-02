@@ -1,6 +1,10 @@
 import { Paper } from '@/types';
+import { API_BASE_URL } from '../config';
+import { apiFetch } from './http';
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+function ensureApi() {
+  if (!API_BASE_URL) throw new Error('VITE_API_URL must be set to call the backend API');
+}
 
 export interface SearchResult {
   paper: Paper;
@@ -9,14 +13,12 @@ export interface SearchResult {
 
 export const searchApi = {
   async searchPapers(query: string, limit: number = 10): Promise<SearchResult[]> {
-    const response = await fetch(`${API_URL}/search?q=${encodeURIComponent(query)}&limit=${limit}`);
-    if (!response.ok) throw new Error('Search failed');
-    return response.json();
+    ensureApi();
+    return apiFetch(`/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`);
   },
 
   async getSimilarPapers(paperId: string): Promise<Paper[]> {
-    const response = await fetch(`${API_URL}/papers/${paperId}/similar`);
-    if (!response.ok) throw new Error('Failed to fetch similar papers');
-    return response.json();
-  }
+    ensureApi();
+    return apiFetch(`/v1/papers/${paperId}/similar`);
+  },
 };
