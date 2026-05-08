@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
-import { GitBranch, Code2, FileText, ChevronRight, Clock } from 'lucide-react';
-import { Paper } from '@/types';
+import { GitBranch, Code2, FileText, ChevronRight } from 'lucide-react';
+import { Paper, PipelineRun } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
@@ -8,35 +8,67 @@ import { cn } from '@/lib/utils';
 
 interface PaperCardProps {
   paper: Paper;
-  status?: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  pipelineRun?: PipelineRun | null;
 }
 
-export function PaperCard({ paper, status = 'COMPLETED' }: PaperCardProps) {
+/** Map backend lowercase run status → display variant */
+type DisplayStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+
+function toDisplayStatus(run?: PipelineRun | null): DisplayStatus {
+  if (!run) return 'COMPLETED'; // Assume completed if no run record fetched
+  switch (run.status) {
+    case 'pending': return 'PENDING';
+    case 'running': return 'RUNNING';
+    case 'completed':
+    case 'partial': return 'COMPLETED';
+    case 'failed': return 'FAILED';
+    default: return 'COMPLETED';
+  }
+}
+
+export function PaperCard({ paper, pipelineRun }: PaperCardProps) {
+  const status = toDisplayStatus(pipelineRun);
+  const meta = paper.metadata;
+
   return (
     <Card className="bg-[#0f0f0f] border-[#1a1a1a] hover:border-primary/50 transition-all group overflow-hidden">
       <CardHeader className="p-5 pb-3">
         <div className="flex items-center justify-between mb-3">
-          <div className="flex gap-2">
-            <Badge variant="secondary" className="bg-secondary/50 text-muted-foreground text-[10px] font-bold uppercase tracking-wider border-none">
-              {paper.metadata.domain}
-            </Badge>
-            <Badge variant="secondary" className="bg-primary/10 text-primary text-[10px] font-bold uppercase tracking-wider border-none">
-              {paper.metadata.sub_domain}
-            </Badge>
+          <div className="flex gap-2 flex-wrap">
+            {meta?.domain && (
+              <Badge
+                variant="secondary"
+                className="bg-secondary/50 text-muted-foreground text-[10px] font-bold uppercase tracking-wider border-none"
+              >
+                {meta.domain}
+              </Badge>
+            )}
+            {meta?.sub_domain && (
+              <Badge
+                variant="secondary"
+                className="bg-primary/10 text-primary text-[10px] font-bold uppercase tracking-wider border-none"
+              >
+                {meta.sub_domain}
+              </Badge>
+            )}
           </div>
           <StatusBadge status={status} />
         </div>
         <h3 className="text-base font-semibold leading-tight line-clamp-2 group-hover:text-primary transition-colors">
-          {paper.metadata.title}
+          {meta?.title ?? 'Untitled Paper'}
         </h3>
-        <p className="text-sm text-muted-foreground truncate mt-1">
-          {paper.metadata.authors.join(', ')}
-        </p>
-        <div className="flex items-center gap-2 mt-2 text-[10px] text-muted-foreground font-medium uppercase tracking-widest">
-          <span>{paper.metadata.venue || 'ArXiv'}</span>
-          <span>•</span>
-          <span>{paper.metadata.year}</span>
-        </div>
+        {meta?.authors && meta.authors.length > 0 && (
+          <p className="text-sm text-muted-foreground truncate mt-1">
+            {meta.authors.join(', ')}
+          </p>
+        )}
+        {(meta?.venue || meta?.year) && (
+          <div className="flex items-center gap-2 mt-2 text-[10px] text-muted-foreground font-medium uppercase tracking-widest">
+            {meta.venue && <span>{meta.venue}</span>}
+            {meta.venue && meta.year && <span>•</span>}
+            {meta.year && <span>{meta.year}</span>}
+          </div>
+        )}
       </CardHeader>
 
       <CardContent className="p-5 pt-0">
@@ -49,17 +81,36 @@ export function PaperCard({ paper, status = 'COMPLETED' }: PaperCardProps) {
           </div>
         ) : status === 'FAILED' ? (
           <div className="bg-destructive/10 text-destructive text-[10px] font-bold p-2 rounded border border-destructive/20">
-            EXTRACTION FAILED: TIMEOUT
+            PIPELINE FAILED
+          </div>
+        ) : status === 'PENDING' ? (
+          <div className="bg-muted/30 text-muted-foreground text-[10px] font-bold p-2 rounded border border-muted/20">
+            AWAITING PIPELINE
           </div>
         ) : (
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+              title="View diagrams"
+            >
               <GitBranch className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+              title="View code"
+            >
               <Code2 className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+              title="View report"
+            >
               <FileText className="w-4 h-4" />
             </Button>
           </div>
@@ -67,7 +118,10 @@ export function PaperCard({ paper, status = 'COMPLETED' }: PaperCardProps) {
       </CardContent>
 
       <CardFooter className="p-0 border-t border-[#1a1a1a]">
-        <Link to={`/papers/${paper.id}`} className="w-full flex items-center justify-between px-5 py-3 text-xs font-bold uppercase tracking-widest hover:bg-secondary transition-colors">
+        <Link
+          to={`/papers/${paper.id}`}
+          className="w-full flex items-center justify-between px-5 py-3 text-xs font-bold uppercase tracking-widest hover:bg-secondary transition-colors"
+        >
           View Analysis
           <ChevronRight className="w-4 h-4" />
         </Link>
@@ -76,19 +130,26 @@ export function PaperCard({ paper, status = 'COMPLETED' }: PaperCardProps) {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const configs: Record<string, { label: string, color: string, icon?: any }> = {
-    PENDING: { label: 'Pending', color: 'bg-muted text-muted-foreground' },
-    RUNNING: { label: 'Running', color: 'bg-primary/20 text-primary' },
+function StatusBadge({ status }: { status: DisplayStatus }) {
+  const configs: Record<DisplayStatus, { label: string; color: string }> = {
+    PENDING:   { label: 'Pending',   color: 'bg-muted text-muted-foreground' },
+    RUNNING:   { label: 'Running',   color: 'bg-primary/20 text-primary' },
     COMPLETED: { label: 'Completed', color: 'bg-green-500/10 text-green-500' },
-    FAILED: { label: 'Failed', color: 'bg-destructive/10 text-destructive' },
+    FAILED:    { label: 'Failed',    color: 'bg-destructive/10 text-destructive' },
   };
 
-  const config = configs[status] || configs.PENDING;
+  const config = configs[status];
 
   return (
-    <div className={cn("px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tighter flex items-center gap-1", config.color)}>
-      {status === 'RUNNING' && <div className="w-1 h-1 bg-primary rounded-full animate-ping" />}
+    <div
+      className={cn(
+        'px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tighter flex items-center gap-1',
+        config.color,
+      )}
+    >
+      {status === 'RUNNING' && (
+        <div className="w-1 h-1 bg-primary rounded-full animate-ping" />
+      )}
       {config.label}
     </div>
   );

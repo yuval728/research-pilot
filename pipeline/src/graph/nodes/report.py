@@ -33,6 +33,7 @@ from src.models.output import (
 )
 from src.models.paper import PaperMetadata
 from src.models.run import StageStatus
+from src.core.events import Event, EventType, default_bus
 
 _STAGE = "report"
 _OUTPUTS_BUCKET = "outputs"
@@ -373,7 +374,6 @@ async def report_node(state: PipelineState) -> dict[str, Any]:
             log.info("report_node.cache_hit", run_id=run_id)
             stage_statuses[_STAGE] = StageStatus.CACHED
             cached_stages.add(_STAGE)
-            from src.core.events import Event, EventType, default_bus
 
             default_bus.emit(
                 Event(

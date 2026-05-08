@@ -8,41 +8,58 @@ interface SummaryTabsProps {
   summaries: SummaryOutput[];
 }
 
+// Backend emits lowercase level values
+const LEVEL_CONFIG: { id: SummaryOutput['level']; label: string }[] = [
+  { id: 'paragraph', label: 'Paragraph' },
+  { id: 'section_by_section', label: 'Sections' },
+  { id: 'bullets', label: 'Bullets' },
+  { id: 'eli5', label: 'ELI5' },
+];
+
 export function SummaryTabs({ summaries }: SummaryTabsProps) {
-  const [activeLevel, setActiveLevel] = useState<SummaryOutput['level']>('PARAGRAPH');
+  // Default to the first available summary level
+  const defaultLevel = summaries[0]?.level ?? 'paragraph';
+  const [activeLevel, setActiveLevel] = useState<SummaryOutput['level']>(defaultLevel);
 
-  const activeSummary = summaries.find(s => s.level === activeLevel) || summaries[0];
+  const activeSummary =
+    summaries.find((s) => s.level === activeLevel) ?? summaries[0];
 
-  const levels: { id: SummaryOutput['level'], label: string }[] = [
-    { id: 'PARAGRAPH', label: 'Paragraph' },
-    { id: 'SECTION_BY_SECTION', label: 'Sections' },
-    { id: 'BULLETS', label: 'Bullets' },
-    { id: 'ELI5', label: 'ELI5' },
-  ];
+  // Only show tabs for levels that have content
+  const availableLevels = LEVEL_CONFIG.filter((l) =>
+    summaries.some((s) => s.level === l.id),
+  );
+
+  if (!activeSummary) {
+    return <p className="text-muted-foreground text-sm">No summaries available.</p>;
+  }
 
   return (
     <div className="space-y-8">
-      <div className="flex p-1 bg-[#0f0f0f] border border-[#1a1a1a] rounded-lg w-fit">
-        {levels.map((level) => (
-          <button
-            key={level.id}
-            onClick={() => setActiveLevel(level.id)}
-            className={cn(
-              "px-6 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all relative",
-              activeLevel === level.id ? "text-white" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {activeLevel === level.id && (
-              <motion.div
-                layoutId="active-tab"
-                className="absolute inset-0 bg-primary rounded-md"
-                transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
-              />
-            )}
-            <span className="relative z-10">{level.label}</span>
-          </button>
-        ))}
-      </div>
+      {availableLevels.length > 1 && (
+        <div className="flex p-1 bg-[#0f0f0f] border border-[#1a1a1a] rounded-lg w-fit">
+          {availableLevels.map((level) => (
+            <button
+              key={level.id}
+              onClick={() => setActiveLevel(level.id)}
+              className={cn(
+                'px-6 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all relative',
+                activeLevel === level.id
+                  ? 'text-white'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {activeLevel === level.id && (
+                <motion.div
+                  layoutId="active-tab"
+                  className="absolute inset-0 bg-primary rounded-md"
+                  transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
+                />
+              )}
+              <span className="relative z-10">{level.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <AnimatePresence mode="wait">
         <motion.div

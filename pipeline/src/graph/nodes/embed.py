@@ -28,6 +28,7 @@ from src.core.logger import get_logger
 from src.graph.state import PipelineState
 from src.domains.ai_ml.schema import AiMlExtraction
 from src.models.run import StageStatus
+from src.core.events import Event, EventType, default_bus
 
 _STAGE = "embed"
 
@@ -185,7 +186,6 @@ async def embed_node(state: PipelineState) -> dict[str, Any]:
             log.info("embed_node.cache_hit", run_id=run_id)
             stage_statuses[_STAGE] = StageStatus.CACHED
             cached_stages.add(_STAGE)
-            from src.core.events import Event, EventType, default_bus
 
             default_bus.emit(
                 Event(

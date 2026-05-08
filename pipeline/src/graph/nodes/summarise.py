@@ -33,6 +33,7 @@ from src.domains.ai_ml.schema import AiMlExtraction
 from src.graph.state import PipelineState
 from src.models.output import SummaryLevel, SummaryOutput
 from src.models.run import StageStatus
+from src.core.events import Event, EventType, default_bus
 
 _STAGE = "summarise"
 _PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "summarise_v1.j2"
@@ -194,7 +195,6 @@ async def summarise_node(state: PipelineState) -> dict[str, Any]:
             log.info("summarise_node.cache_hit", run_id=run_id)
             stage_statuses[_STAGE] = StageStatus.CACHED
             cached_stages.add(_STAGE)
-            from src.core.events import Event, EventType, default_bus
 
             default_bus.emit(
                 Event(

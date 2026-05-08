@@ -7,53 +7,79 @@ function ensureApi() {
 }
 
 export const papersApi = {
-  async listPapers(filters?: any): Promise<Paper[]> {
+  async listPapers(filters?: Record<string, string>): Promise<Paper[]> {
     ensureApi();
-    return apiFetch(`/v1/papers`);
+    const params = filters
+      ? '?' + new URLSearchParams(filters).toString()
+      : '';
+    return apiFetch(`/api/v1/papers${params}`);
   },
 
   async getPaper(id: string): Promise<Paper> {
     ensureApi();
-    return apiFetch(`/v1/papers/${id}`);
+    return apiFetch(`/api/v1/papers/${id}`);
   },
 
   async uploadPaper(file: File): Promise<Paper> {
     ensureApi();
-    const url = `/v1/papers/upload`;
     const token = (await getAccessToken()) ?? null;
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch(`${API_BASE_URL}${url}`, { method: 'POST', headers, body: formData });
-    if (!res.ok) throw new Error('Failed to upload paper');
+    const res = await fetch(`${API_BASE_URL}/api/v1/papers/upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Failed to upload paper: ${body}`);
+    }
     return res.json();
   },
 
   async createFromArxiv(url: string): Promise<Paper> {
     ensureApi();
-    return apiFetch(`/v1/papers/arxiv`, { method: 'POST', json: { url } });
+    return apiFetch(`/api/v1/papers/arxiv`, { method: 'POST', json: { url } });
+  },
+
+  async createFromDoi(doi: string): Promise<Paper> {
+    ensureApi();
+    return apiFetch(`/api/v1/papers/doi`, { method: 'POST', json: { doi } });
+  },
+
+  async deletePaper(id: string): Promise<void> {
+    ensureApi();
+    await apiFetch(`/api/v1/papers/${id}`, { method: 'DELETE' });
   },
 
   async getOutputBundle(id: string): Promise<OutputBundle> {
     ensureApi();
-    return apiFetch(`/v1/papers/${id}/outputs`);
+    return apiFetch(`/api/v1/papers/${id}/outputs`);
   },
 
   async getReportMarkdown(id: string): Promise<string> {
     ensureApi();
-    return apiFetch(`/v1/papers/${id}/outputs/report.md`);
+    return apiFetch(`/api/v1/papers/${id}/outputs/report.md`);
   },
 
   async getCodeSource(id: string): Promise<string> {
     ensureApi();
-    return apiFetch(`/v1/papers/${id}/outputs/code.py`);
+    return apiFetch(`/api/v1/papers/${id}/outputs/code.py`);
   },
 
   async getNotebook(id: string): Promise<Blob> {
     ensureApi();
     const token = (await getAccessToken()) ?? null;
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-    const response = await fetch(`${API_BASE_URL}/api/v1/papers/${id}/outputs/notebook.ipynb`, { headers });
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+    const response = await fetch(
+      `${API_BASE_URL}/api/v1/papers/${id}/outputs/notebook.ipynb`,
+      { headers },
+    );
     if (!response.ok) throw new Error('Failed to download notebook');
     return response.blob();
   },

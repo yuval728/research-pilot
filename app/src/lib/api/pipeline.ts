@@ -1,24 +1,51 @@
 import { PipelineRun } from '@/types';
-import { API_BASE_URL } from '../config';
 import { apiFetch } from './http';
 
 function ensureApi() {
-  if (!API_BASE_URL) throw new Error('VITE_API_URL must be set to call the backend API');
+  if (!import.meta.env.VITE_API_URL && !window.location.hostname) {
+    throw new Error('VITE_API_URL must be set to call the backend API');
+  }
 }
 
 export const pipelineApi = {
-  async triggerRun(paperId: string): Promise<{ run_id: string }> {
-    ensureApi();
-    return apiFetch(`/v1/pipeline/run/${paperId}`, { method: 'POST', json: { paper_id: paperId } });
+  /**
+   * Trigger a pipeline run for a paper.
+   * POST /api/v1/pipeline/run/{paper_id}  — paper_id is a path param, no body needed.
+   * Returns the PipelineRun record (status=pending immediately).
+   */
+  async triggerRun(paperId: string): Promise<PipelineRun> {
+    return apiFetch(`/api/v1/pipeline/run/${paperId}`, { method: 'POST' });
   },
 
+  /**
+   * Get full status + stage results for a run.
+   * GET /api/v1/pipeline/runs/{run_id}
+   */
   async getRunStatus(runId: string): Promise<PipelineRun> {
-    ensureApi();
-    return apiFetch(`/v1/pipeline/runs/${runId}`);
+    return apiFetch(`/api/v1/pipeline/runs/${runId}`);
   },
 
+  /**
+   * Retry a single failed stage.
+   * POST /api/v1/pipeline/runs/{run_id}/stages/{stage_name}/retry
+   */
   async retryStage(runId: string, stageName: string): Promise<void> {
-    ensureApi();
-    await apiFetch(`/v1/pipeline/runs/${runId}/stages/${stageName}/retry`, { method: 'POST', json: { stage_name: stageName } });
+    await apiFetch(`/api/v1/pipeline/runs/${runId}/stages/${stageName}/retry`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * Get the latest pipeline run for a given paper.
+   * We poll GET /api/v1/pipeline/runs/{run_id} — but to look up by paper we need
+   * to first find the run. This helper fetches the paper's run list from the backend.
+   * For now we query the run status by run_id (stored after trigger).
+   *
+   * If you want runs-by-paper, add a query param filter once the backend supports it.
+   */
+  async getRunForPaper(_paperId: string): Promise<PipelineRun | null> {
+    // Backend doesn't expose a list-runs-by-paper endpoint yet.
+    // Callers should store runId after triggerRun and use getRunStatus.
+    return null;
   },
 };
