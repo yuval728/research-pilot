@@ -32,9 +32,19 @@ export function DiagramViewer({ diagrams }: DiagramViewerProps) {
   useEffect(() => {
     mermaid.initialize({
       startOnLoad: false,
-      theme: 'dark',
+      theme: 'neutral',
       securityLevel: 'loose',
       fontFamily: 'Inter',
+      // themeVariables: {
+      //   darkMode: false,
+      //   background: '#ffffff',
+      //   primaryColor: '#1a1a1a',
+      //   primaryTextColor: '#fff',
+      //   primaryBorderColor: '#333',
+      //   lineColor: '#666',
+      //   secondaryColor: '#2a2a2a',
+      //   tertiaryColor: '#3a3a3a',
+      // }
     });
   }, []);
 
@@ -125,12 +135,12 @@ export function DiagramViewer({ diagrams }: DiagramViewerProps) {
       </div>
 
       {/* Diagram canvas */}
-      <Card className="bg-[#050505] border-[#1a1a1a] p-8 flex items-center justify-center min-h-[400px] relative overflow-auto">
+      <Card className="bg-[#050505] border-[#1a1a1a] p-8 flex items-center justify-center min-h-[500px] relative overflow-auto hide-scrollbar">
         {renderError ? (
           <p className="text-destructive text-sm">{renderError}</p>
         ) : svg ? (
           <div
-            className="transition-transform duration-200 ease-out"
+            className="transition-transform duration-200 ease-out mermaid flex items-center justify-center"
             style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
             dangerouslySetInnerHTML={{ __html: svg }}
           />

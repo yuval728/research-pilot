@@ -71,8 +71,9 @@
   background: transparent !important;
 }
 .mermaid svg {
-  max-width: 100%;
-  height: auto;
+  max-width: none !important;
+  width: 100% !important;
+  height: auto !important;
 }
 
 /* Custom Scrollbar */
@@ -88,4 +89,46 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-muted-foreground/50;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Markdown typography */
+.prose h1, .prose h2, .prose h3, .prose h4 { color: #fff; margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 600; }
+.prose h1 { font-size: 2em; }
+.prose h2 { font-size: 1.5em; }
+.prose h3 { font-size: 1.25em; border-bottom: 1px solid #333; padding-bottom: 0.3em; }
+.prose p { margin-bottom: 1em; line-height: 1.6; }
+.prose ul, .prose ol { margin-left: 1.5em; margin-bottom: 1em; }
+.prose ul { list-style-type: disc; }
+.prose ol { list-style-type: decimal; }
+.prose strong { color: #fff; }
+.prose a { color: #3b82f6; text-decoration: underline; }
+.prose blockquote { border-left: 4px solid #333; padding-left: 1em; color: #a1a1aa; margin-bottom: 1em; }
+.prose code { background: #1a1a1a; padding: 0.2em 0.4em; border-radius: 0.25em; font-family: var(--font-mono); font-size: 0.9em; }
+.prose pre blockquote { border: none; }
+.prose pre { background: #1a1a1a; padding: 1em; border-radius: 0.5em; overflow-x: auto; margin-bottom: 1em; }
+.prose th, .prose td {
+  border: 1px solid #333;
+  padding: 0.5em 1em;
+}
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1em;
+}
+.prose thead {
+  background: #1a1a1a;
+}
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5em;
+  margin: 1em 0;
 }

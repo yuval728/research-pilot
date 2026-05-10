@@ -107,7 +107,7 @@ async def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> Non
                     id=uuid.uuid4(),
                     paper_id=uuid.UUID(paper_id),
                     output_type=f"summary_{summary.level.value}",
-                    storage_path=f"inline:summary_{summary.level.value}",
+                    storage_path=f"inline:{summary.content}",
                 )
                 session.add(row)
             await session.commit()
@@ -135,13 +135,18 @@ async def _load_cached_summaries(paper_id: str) -> list[SummaryOutput]:
             summaries: list[SummaryOutput] = []
             for orm in orms:
                 level_str = orm.output_type.replace("summary_", "")
+                content = orm.storage_path
+                if content.startswith("inline:"):
+                    content = content[len("inline:") :]
+                    if content == f"summary_{level_str}":  # Backwards compatibility
+                        content = (
+                            "Summary content not available in DB (inline placeholder)"
+                        )
                 summaries.append(
                     SummaryOutput(
                         paper_id=uuid.UUID(paper_id),
                         level=SummaryLevel(level_str),
-                        content="Summary content not available in DB (inline placeholder)"
-                        if orm.storage_path.startswith("inline:")
-                        else orm.storage_path,
+                        content=content,
                     )
                 )
             return summaries

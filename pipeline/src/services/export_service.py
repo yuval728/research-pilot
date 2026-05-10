@@ -126,12 +126,13 @@ class ExportService:
             t = orm.output_type
             if t.startswith("summary_"):
                 level_str = t.replace("summary_", "")
-                # Note: Actual text is missing from inline DB storage in current schema,
-                # but we will build what we can.
-                # If `inline:` we treat it as placeholder, else we could download.
                 content = orm.storage_path
                 if content.startswith("inline:"):
-                    content = "Summary content not available in DB (inline placeholder)"
+                    content = content[len("inline:") :]
+                    if content == f"summary_{level_str}":  # Backwards compatibility
+                        content = (
+                            "Summary content not available in DB (inline placeholder)"
+                        )
                 bundle.summaries.append(
                     SummaryOutput(
                         paper_id=paper_id,
@@ -141,12 +142,29 @@ class ExportService:
                 )
             elif t.startswith("diagram_"):
                 level_str = t.replace("diagram_", "")
+                svg_path = orm.storage_path
+                dsl_code = "DSL Code Omitted"
+                if orm.storage_path.startswith("json:"):
+                    import json
+
+                    try:
+                        data = json.loads(orm.storage_path[5:])
+                        dsl_code = data.get("dsl_code", dsl_code)
+                        svg_path = data.get("svg_path")
+                    except Exception:
+                        pass
+                elif orm.storage_path.startswith("inline:"):
+                    dsl_code = orm.storage_path[len("inline:") :]
+                    svg_path = None
+                    if dsl_code == level_str:
+                        dsl_code = "DSL Code Omitted"
+
                 bundle.diagrams.append(
                     DiagramOutput(
                         paper_id=paper_id,
                         diagram_type=DiagramType(level_str),
-                        dsl_code="DSL Code Omitted",  # Omitted since DB just has path
-                        svg_path=orm.storage_path,
+                        dsl_code=dsl_code,
+                        svg_path=svg_path,
                     )
                 )
             elif t == "report":

@@ -332,11 +332,14 @@ async def _store_diagram(paper_id: str, diagram: DiagramOutput) -> None:
         from src.db.session import get_db_context
 
         async with get_db_context() as session:
+            import json
+
+            data = {"dsl_code": diagram.dsl_code, "svg_path": diagram.svg_path}
             row = OutputORM(
                 id=uuid.uuid4(),
                 paper_id=uuid.UUID(paper_id),
                 output_type=f"diagram_{diagram.diagram_type.value}",
-                storage_path=diagram.svg_path or f"inline:{diagram.diagram_type.value}",
+                storage_path=f"json:{json.dumps(data)}",
             )
             session.add(row)
             await session.commit()
@@ -364,14 +367,29 @@ async def _load_cached_diagrams(paper_id: str) -> list[DiagramOutput]:
             diagrams: list[DiagramOutput] = []
             for orm in orms:
                 level_str = orm.output_type.replace("diagram_", "")
+                svg_path = orm.storage_path
+                dsl_code = "DSL Code Omitted"
+                if orm.storage_path.startswith("json:"):
+                    import json
+
+                    try:
+                        data = json.loads(orm.storage_path[5:])
+                        dsl_code = data.get("dsl_code", dsl_code)
+                        svg_path = data.get("svg_path")
+                    except Exception:
+                        pass
+                elif orm.storage_path.startswith("inline:"):
+                    dsl_code = orm.storage_path[len("inline:") :]
+                    svg_path = None
+                    if dsl_code == level_str:
+                        dsl_code = "DSL Code Omitted"
+
                 diagrams.append(
                     DiagramOutput(
                         paper_id=uuid.UUID(paper_id),
                         diagram_type=DiagramType(level_str),
-                        dsl_code="DSL Code Omitted",  # Raw text not in DB schema currently
-                        svg_path=orm.storage_path
-                        if not orm.storage_path.startswith("inline:")
-                        else None,
+                        dsl_code=dsl_code,
+                        svg_path=svg_path,
                     )
                 )
             return diagrams

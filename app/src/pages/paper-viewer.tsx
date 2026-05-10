@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -10,6 +10,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ import { CodeViewer } from '@/components/viewer/code-viewer';
 import { DiagramViewer } from '@/components/viewer/diagram-viewer';
 import { ExtractionTree } from '@/components/viewer/extraction-tree';
 import { SummaryTabs } from '@/components/viewer/summary-tabs';
+import { MarkdownDiagram } from '@/components/viewer/markdown-diagram';
 import { papersApi } from '@/lib/api/papers';
 import { pipelineApi } from '@/lib/api/pipeline';
 import { usePipelineSSE } from '@/lib/hooks/use-pipeline-sse';
@@ -51,6 +53,8 @@ const initialLoadPromises = new Map<
   string,
   Promise<{ paper: Paper; bundle: OutputBundle; latestRun: PipelineRun | null }>
 >();
+
+import { supabase } from '@/lib/supabase';
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -110,16 +114,18 @@ export default function PaperViewerPage() {
   }, [id]);
 
   useEffect(() => {
+    // Only check if it JUST finished to trigger a refresh
     if (
       runDone &&
       (resolvedRun?.status === 'completed' ||
         resolvedRun?.status === 'partial' ||
-        resolvedRun?.status === 'failed')
+        resolvedRun?.status === 'failed') &&
+        staticRun?.status !== resolvedRun.status
     ) {
       refreshLatestRun().catch(console.error);
       refreshOutputs().catch(console.error);
     }
-  }, [refreshLatestRun, refreshOutputs, resolvedRun?.status, runDone]);
+  }, [refreshLatestRun, refreshOutputs, resolvedRun?.status, runDone, staticRun?.status]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -181,16 +187,6 @@ export default function PaperViewerPage() {
       downloadBlob(new Blob([code], { type: 'text/x-python' }), `${id}_implementation.py`);
     } catch {
       toast.error('Failed to download code');
-    }
-  }, [id]);
-
-  const handleDownloadNotebook = useCallback(async () => {
-    if (!id) return;
-    try {
-      const blob = await papersApi.getNotebook(id);
-      downloadBlob(blob, `${id}_notebook.ipynb`);
-    } catch {
-      toast.error('Failed to download notebook');
     }
   }, [id]);
 
@@ -301,16 +297,6 @@ export default function PaperViewerPage() {
             <Download className="w-3.5 h-3.5 mr-2" />
             Code (.PY)
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 border-[#1a1a1a] text-[10px] font-bold uppercase tracking-widest"
-            disabled={!bundle?.code?.notebook_path}
-            onClick={handleDownloadNotebook}
-          >
-            <Download className="w-3.5 h-3.5 mr-2" />
-            Notebook (.IPYNB)
-          </Button>
           {!hasOutputs && !isRunActive && (
             <Button
               size="sm"
@@ -390,7 +376,31 @@ export default function PaperViewerPage() {
                 <TabsContent value="report" className="mt-0">
                   {reportMarkdown ? (
                     <div className="prose prose-invert max-w-none markdown-body">
-                      <Markdown>{reportMarkdown}</Markdown>
+                      <Markdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          img: ({ node, ...props }) => {
+                            if (props.src && !props.src.startsWith('http') && !props.src.startsWith('data:')) {
+                              const { data } = supabase.storage.from('outputs').getPublicUrl(props.src);
+                              return <img {...props} src={data.publicUrl} />;
+                            }
+                           ,
+                          code: ({ node, inline, className, children, ...props }: any) => {
+                            const match = /language-(\w+)/.exec(className || '');
+                            if (!inline && match && match[1] === 'mermaid') {
+                              return <MarkdownDiagram code={String(children).replace(/\n$/, '')} />;
+                            }
+                            return (
+                              <code className={className} {...props}>
+                                {children}
+                              </code>
+                            );
+                          } return <img {...props} />;
+                          }
+                        }}
+                      >
+                        {reportMarkdown}
+                      </Markdown>
                     </div>
                   ) : bundle!.report ? (
                     <p className="text-muted-foreground text-sm">Loading report...</p>

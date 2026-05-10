@@ -70,17 +70,17 @@ export const papersApi = {
     return apiFetch(`/api/v1/papers/${id}/outputs/code.py`);
   },
 
-  async getNotebook(id: string): Promise<Blob> {
-    ensureApi();
-    const token = (await getAccessToken()) ?? null;
-    const headers: Record<string, string> = token
-      ? { Authorization: `Bearer ${token}` }
-      : {};
-    const response = await fetch(
-      `${API_BASE_URL}/api/v1/papers/${id}/outputs/notebook.ipynb`,
-      { headers },
-    );
-    if (!response.ok) throw new Error('Failed to download notebook');
-    return response.blob();
-  },
+  // async getNotebook(id: string): Promise<Blob> {
+  //   ensureApi();
+  //   const token = (await getAccessToken()) ?? null;
+  //   const headers: Record<string, string> = token
+  //     ? { Authorization: `Bearer ${token}` }
+  //     : {};
+  //   const response = await fetch(
+  //     `${API_BASE_URL}/api/v1/papers/${id}/outputs/notebook.ipynb`,
+  //     { headers },
+  //   );
+  //   if (!response.ok) throw new Error('Failed to download notebook');
+  //   return response.blob();
+  // },
 };

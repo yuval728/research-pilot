@@ -60,9 +60,8 @@ def _get_diagram_svg_ref(
     """Return an embedded SVG reference or a Mermaid DSL code block."""
     for d in diagrams:
         if d.diagram_type == diagram_type:
-            if d.svg_path:
-                return f"![{diagram_type.value} diagram]({d.svg_path})"
-            # Fall back to fenced Mermaid block
+            # Always return a fenced Mermaid block instead of relying on public SVGs
+            # which may have private bucket access issues or styling mismatches.
             return f"```mermaid\n{d.dsl_code}\n```"
     return "_Diagram not generated._"
 

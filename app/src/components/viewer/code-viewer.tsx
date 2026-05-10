@@ -77,17 +77,17 @@ export function CodeViewer({ paperId, pythonPath, syntheticData }: CodeViewerPro
     }
   };
 
-  const handleDownloadNotebook = async () => {
-    setDownloading('ipynb');
-    try {
-      const blob = await papersApi.getNotebook(paperId);
-      downloadBlob(blob, `${paperId}_notebook.ipynb`);
-    } catch {
-      toast.error('Failed to download notebook');
-    } finally {
-      setDownloading(null);
-    }
-  };
+  // const handleDownloadNotebook = async () => {
+  //   setDownloading('ipynb');
+  //   try {
+  //     const blob = await papersApi.getNotebook(paperId);
+  //     downloadBlob(blob, `${paperId}_notebook.ipynb`);
+  //   } catch {
+  //     toast.error('Failed to download notebook');
+  //   } finally {
+  //     setDownloading(null);
+  //   }
+  // };
 
   return (
     <div className="space-y-6">
@@ -118,7 +118,7 @@ export function CodeViewer({ paperId, pythonPath, syntheticData }: CodeViewerPro
             )}
             .py
           </Button>
-          <Button
+          {/* <Button
             variant="outline"
             size="sm"
             className="h-8 border-[#1a1a1a] text-[10px] font-bold uppercase tracking-widest"
@@ -131,7 +131,7 @@ export function CodeViewer({ paperId, pythonPath, syntheticData }: CodeViewerPro
               <Download className="w-3.5 h-3.5 mr-2" />
             )}
             .ipynb
-          </Button>
+          </Button> */}
         </div>
       </div>
 
