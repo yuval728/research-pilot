@@ -4,7 +4,7 @@ import { StageResult, PipelineRun } from '@/types';
 
 export function usePipelineRealtime(runId: string | null) {
   const [stages, setStages] = useState<Record<string, StageResult>>({});
-  const [runStatus, setRunStatus] = useState<PipelineRun['status']>('PENDING');
+  const [runStatus, setRunStatus] = useState<PipelineRun['status']>('pending');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {

@@ -7,13 +7,14 @@ Retrieves generated assets from Supabase Storage and DB.
 import uuid
 
 import anyio
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import Client, create_client  # type: ignore[import-untyped]
 
 from src.core.config import get_settings
 from src.core.exceptions import FileNotFoundError, StorageError
-from src.db.models import OutputORM
+from src.db.models import ExtractionORM, OutputORM
+from src.domains.ai_ml.schema import AiMlExtraction
 from src.models.output import (
     CodeOutput,
     DiagramOutput,
@@ -117,6 +118,7 @@ class ExportService:
             diagrams=[],
             code=None,
             report=None,
+            extraction=None,
         )
         code_paths = {}
 
@@ -156,13 +158,23 @@ class ExportService:
             elif t == "code_notebook":
                 code_paths["notebook"] = orm.storage_path
 
-        if code_paths or any(orm.output_type == "codegen" for orm in orms):
-            # Sometimes single "codegen" type is inserted
+        if code_paths:
             bundle.code = CodeOutput(
                 paper_id=paper_id,
                 python_path=code_paths.get("python"),
                 notebook_path=code_paths.get("notebook"),
                 synthetic_data_description=None,
             )
+
+        extraction_stmt = (
+            select(ExtractionORM.data)
+            .where(ExtractionORM.paper_id == paper_id)
+            .order_by(desc(ExtractionORM.extracted_at))
+            .limit(1)
+        )
+        extraction_res = await self.db.execute(extraction_stmt)
+        extraction_data = extraction_res.scalar_one_or_none()
+        if extraction_data:
+            bundle.extraction = AiMlExtraction.model_validate(extraction_data)
 
         return bundle

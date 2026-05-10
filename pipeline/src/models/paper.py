@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Annotated
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
+from src.models.run import PipelineRun
 
 
 class PaperSource(str, Enum):
@@ -102,6 +103,15 @@ class Paper(BaseModel):
     def require_url_for_non_upload(cls, v: object) -> object:
         """Passthrough — cross-field logic lives in PaperCreate."""
         return v
+
+
+class PaperListItem(BaseModel):
+    """Paper payload enriched with the latest pipeline run."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    paper: Paper
+    latest_run: PipelineRun | None = None
 
 
 # ---------------------------------------------------------------------------

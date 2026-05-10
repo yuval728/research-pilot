@@ -64,6 +64,20 @@ async def get_run_status(
         ) from exc
 
 
+@router.get(
+    "/papers/{paper_id}/latest-run",
+    response_model=PipelineRun | None,
+    summary="Get the latest pipeline run for a paper",
+    description="Returns the newest PipelineRun for the given paper, or null if none exists.",
+)
+async def get_latest_run_for_paper(
+    paper_id: uuid.UUID,
+    pipeline_service: PipelineServiceDep,
+    _user: CurrentUserDep,
+) -> PipelineRun | None:
+    return await pipeline_service.get_latest_run_for_paper(paper_id)
+
+
 @router.post(
     "/runs/{run_id}/stages/{stage_name}/retry",
     status_code=status.HTTP_202_ACCEPTED,
@@ -128,9 +142,9 @@ async def stream_run_status(
                     run = await pipeline_service.get_run_status(run_id)
                     payload = {
                         "id": str(run.id),
-                        "status": str(run.status),
+                        "status": run.status.value,
                         "stages": {
-                            k: {"status": str(v.status)} for k, v in run.stages.items()
+                            k: {"status": v.status.value} for k, v in run.stages.items()
                         },
                         "updated_at": run.created_at.isoformat()
                         if hasattr(run, "created_at")
@@ -139,7 +153,7 @@ async def stream_run_status(
                     if payload != last_payload:
                         last_payload = payload
                         yield f"data: {json.dumps(payload)}\n\n"
-                    if str(run.status) in ("SUCCESS", "FAILED", "CANCELLED"):
+                    if run.status.value in ("completed", "failed", "partial"):
                         break
                 except Exception:
                     # On errors, continue polling; don't break the stream immediately

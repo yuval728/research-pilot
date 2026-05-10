@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.models.paper import Paper
-from src.models.run import PipelineRun, StageResult
+from src.models.paper import Paper, PaperListItem
+from src.models.run import PipelineRun, StageResult, StageStatus
 
 
 # ---------------------------------------------------------------------------
@@ -193,11 +193,13 @@ class TestPaperServiceListPapers:
     async def test_returns_list_of_papers(self):
         orm1 = _paper_orm()
         orm2 = _paper_orm()
-        result_mock = MagicMock()
-        result_mock.scalars.return_value.all.return_value = [orm1, orm2]
+        papers_result_mock = MagicMock()
+        papers_result_mock.scalars.return_value.all.return_value = [orm1, orm2]
+        runs_result_mock = MagicMock()
+        runs_result_mock.scalars.return_value.all.return_value = []
 
         db = AsyncMock()
-        db.execute = AsyncMock(return_value=result_mock)
+        db.execute = AsyncMock(side_effect=[papers_result_mock, runs_result_mock])
 
         with patch(
             "pipeline.services.paper_service.get_settings",
@@ -209,14 +211,15 @@ class TestPaperServiceListPapers:
             papers = await svc.list_papers()
 
         assert len(papers) == 2
-        assert all(isinstance(p, Paper) for p in papers)
+        assert all(isinstance(p, PaperListItem) for p in papers)
+        assert all(isinstance(p.paper, Paper) for p in papers)
 
     @pytest.mark.asyncio
     async def test_empty_result(self):
-        result_mock = MagicMock()
-        result_mock.scalars.return_value.all.return_value = []
+        papers_result_mock = MagicMock()
+        papers_result_mock.scalars.return_value.all.return_value = []
         db = AsyncMock()
-        db.execute = AsyncMock(return_value=result_mock)
+        db.execute = AsyncMock(return_value=papers_result_mock)
 
         with patch(
             "pipeline.services.paper_service.get_settings",
@@ -317,6 +320,89 @@ class TestPipelineServiceTriggerRun:
         with pytest.raises(ValueError, match="not found"):
             await svc.trigger_run(uuid.uuid4())
 
+    @pytest.mark.asyncio
+    async def test_execute_pipeline_run_persists_stage_updates_and_partial_status(self):
+        run_id = uuid.uuid4()
+        paper_id = uuid.uuid4()
+        run_orm = _run_orm(run_id=run_id, paper_id=paper_id, status="pending")
+        run_orm.stages = []
+
+        class FakeSession:
+            def __init__(self):
+                self.run = run_orm
+
+            async def get(self, model, pk, options=None):
+                if model.__name__ == "PipelineRunORM" and pk == run_id:
+                    return self.run
+                return None
+
+            async def execute(self, stmt):
+                result = MagicMock()
+                result.scalars.return_value.all.return_value = list(self.run.stages)
+                return result
+
+            def add(self, stage):
+                self.run.stages.append(stage)
+
+            async def commit(self):
+                return None
+
+        class FakeContext:
+            def __init__(self, session):
+                self.session = session
+
+            async def __aenter__(self):
+                return self.session
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        async def fake_astream(_initial_state):
+            yield {
+                "extract": {
+                    "stage_statuses": {
+                        "extract": StageStatus.COMPLETED,
+                        "diagram": StageStatus.FAILED,
+                    },
+                    "token_usage": {"extract": 123},
+                    "cached_stages": set(),
+                    "errors": ["[diagram] renderer failed"],
+                }
+            }
+
+        fake_session = FakeSession()
+
+        with (
+            patch(
+                "pipeline.services.pipeline_service.get_db_context",
+                side_effect=lambda: FakeContext(fake_session),
+            ),
+            patch(
+                "pipeline.services.pipeline_service.research_pipeline"
+            ) as mock_pipeline,
+        ):
+            mock_pipeline.astream = fake_astream
+
+            from src.services.pipeline_service import PipelineService  # noqa: PLC0415
+
+            svc = PipelineService(AsyncMock())
+            await svc._execute_pipeline_run(run_id, {"run_id": str(run_id)})
+
+        assert run_orm.status == "partial"
+        assert run_orm.total_tokens == 123
+        assert run_orm.error == "[diagram] renderer failed"
+        assert {stage.stage_name for stage in run_orm.stages} == {"extract", "diagram"}
+        extract_stage = next(
+            stage for stage in run_orm.stages if stage.stage_name == "extract"
+        )
+        diagram_stage = next(
+            stage for stage in run_orm.stages if stage.stage_name == "diagram"
+        )
+        assert extract_stage.status == "completed"
+        assert extract_stage.token_count == 123
+        assert diagram_stage.status == "failed"
+        assert diagram_stage.error_message == "[diagram] renderer failed"
+
 
 class TestPipelineServiceGetRunStatus:
     @pytest.mark.asyncio
@@ -349,6 +435,23 @@ class TestPipelineServiceGetRunStatus:
         svc = PipelineService(db)
         with pytest.raises(ValueError, match="not found"):
             await svc.get_run_status(uuid.uuid4())
+
+    @pytest.mark.asyncio
+    async def test_get_latest_run_for_paper_returns_latest(self):
+        paper_id = uuid.uuid4()
+        run_orm = _run_orm(paper_id=paper_id, status="completed")
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = run_orm
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=result_mock)
+
+        from src.services.pipeline_service import PipelineService  # noqa: PLC0415
+
+        svc = PipelineService(db)
+        run = await svc.get_latest_run_for_paper(paper_id)
+
+        assert run is not None
+        assert run.paper_id == paper_id
 
 
 class TestPipelineServiceGetStageResult:
@@ -470,6 +573,35 @@ class TestExportServiceGetOutputBundle:
 
         assert len(bundle.summaries) == 1
         assert bundle.summaries[0].level.value == "bullets"
+
+    @pytest.mark.asyncio
+    async def test_latest_extraction_populates_bundle(self):
+        paper_id = uuid.uuid4()
+        outputs_result = MagicMock()
+        outputs_result.scalars.return_value.all.return_value = []
+        extraction_result = MagicMock()
+        extraction_result.scalar_one_or_none.return_value = {
+            "task": "classification",
+            "problem_statement": "Need better accuracy",
+            "key_contributions": [],
+            "architecture_components": [],
+            "datasets": [],
+            "evaluation_metrics": [],
+        }
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[outputs_result, extraction_result])
+
+        with patch(
+            "pipeline.services.export_service.get_settings",
+            return_value=_fake_settings(),
+        ):
+            from src.services.export_service import ExportService  # noqa: PLC0415
+
+            svc = ExportService(db)
+            bundle = await svc.get_output_bundle(paper_id)
+
+        assert bundle.extraction is not None
+        assert bundle.extraction.task == "classification"
 
 
 # ---------------------------------------------------------------------------

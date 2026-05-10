@@ -6,7 +6,7 @@ import { SearchBar } from '@/components/library/search-bar';
 import { PaperCard } from '@/components/library/paper-card';
 import { papersApi } from '@/lib/api/papers';
 import { searchApi } from '@/lib/api/search';
-import { Paper } from '@/types';
+import { Paper, PaperListItem } from '@/types';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -15,6 +15,7 @@ const DOMAINS = ['All', 'NLP', 'Computer Vision', 'Reinforcement Learning', 'Gen
 
 export default function LibraryPage() {
   const [papers, setPapers] = useState<Paper[]>([]);
+  const [paperItems, setPaperItems] = useState<PaperListItem[]>([]);
   const [searchResults, setSearchResults] = useState<Paper[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
@@ -27,7 +28,8 @@ export default function LibraryPage() {
     const fetchPapers = async () => {
       try {
         const data = await papersApi.listPapers();
-        setPapers(data);
+        setPaperItems(data);
+        setPapers(data.map((item) => item.paper));
       } catch (error) {
         console.error('Failed to fetch papers:', error);
       } finally {
@@ -86,6 +88,9 @@ export default function LibraryPage() {
   });
 
   const isEmpty = !isLoading && displayPapers.length === 0;
+  const latestRunByPaperId = Object.fromEntries(
+    paperItems.map((item) => [item.paper.id, item.latest_run]),
+  );
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -152,7 +157,11 @@ export default function LibraryPage() {
         ) : !isEmpty ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {displayPapers.map((paper) => (
-              <PaperCard key={paper.id} paper={paper} />
+              <PaperCard
+                key={paper.id}
+                paper={paper}
+                pipelineRun={latestRunByPaperId[paper.id] ?? null}
+              />
             ))}
           </div>
         ) : (

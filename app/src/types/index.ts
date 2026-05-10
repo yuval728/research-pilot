@@ -13,6 +13,11 @@ export interface Paper {
   updated_at: string;
 }
 
+export interface PaperListItem {
+  paper: Paper;
+  latest_run: PipelineRun | null;
+}
+
 export interface PaperMetadata {
   title: string;
   authors: string[];
@@ -64,7 +69,7 @@ export interface OutputBundle {
   diagrams: DiagramOutput[];
   code: CodeOutput | null;
   report: ReportOutput | null;
-  extraction: ExtractionData | null;
+  extraction?: ExtractionData | null;
 }
 
 export interface SummaryOutput {
@@ -102,30 +107,40 @@ export interface ReportOutput {
 // ---------------------------------------------------------------------------
 
 export interface ExtractionData {
-  task: string;
-  problem_statement: string;
+  task: string | null;
+  problem_statement: string | null;
   key_contributions: string[];
+  proposed_method_summary?: string | null;
   architecture_components: ArchitectureComponent[];
+  training_procedure?: string | null;
+  loss_functions?: string[];
   datasets: Dataset[];
-  metrics_results: MetricResult[];
-  limitations: string[];
-  future_work: string[];
+  evaluation_metrics: MetricResult[];
+  baseline_comparisons?: string | null;
+  main_results?: string | null;
+  limitations?: string | null;
+  future_work?: string | null;
+  visual_elements_description?: string | null;
+  mathematical_contributions?: string | null;
 }
 
 export interface ArchitectureComponent {
   name: string;
   type: string;
   description: string;
+  inputs?: string[];
+  outputs?: string[];
 }
 
 export interface Dataset {
   name: string;
-  size: string;
-  modality: string;
+  size: string | null;
+  modality?: string | null;
+  split_info?: string | null;
 }
 
 export interface MetricResult {
-  metric: string;
+  metric_name: string;
   value: string;
-  vs_baseline: string;
+  baseline_comparison?: string | null;
 }

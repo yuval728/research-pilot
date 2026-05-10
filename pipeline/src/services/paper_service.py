@@ -13,14 +13,17 @@ import anyio
 import arxiv  # type: ignore[import-untyped]
 import httpx
 from litellm import aembedding
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from supabase import Client, create_client
 
 from src.core.config import get_settings
 from src.core.exceptions import FileUploadError
 from src.db.models import EmbeddingORM, PaperORM
-from src.models.paper import Paper, PaperMetadata, PaperSource
+from src.db.models import PipelineRunORM
+from src.models.paper import Paper, PaperListItem, PaperMetadata, PaperSource
+from src.models.run import PipelineRun, RunStatus, StageResult, StageStatus
 
 settings = get_settings()
 
@@ -56,6 +59,42 @@ class PaperService:
             created_at=orm.created_at.replace(tzinfo=timezone.utc),
             updated_at=orm.updated_at.replace(tzinfo=timezone.utc),
         )
+
+    def _to_stage_pydantic(self, orm) -> StageResult:
+        return StageResult(
+            stage_name=orm.stage_name,
+            status=StageStatus(orm.status),
+            started_at=orm.started_at.replace(tzinfo=timezone.utc)
+            if orm.started_at
+            else None,
+            completed_at=orm.completed_at.replace(tzinfo=timezone.utc)
+            if orm.completed_at
+            else None,
+            error_message=orm.error_message,
+            cached=orm.cached,
+            token_count=orm.token_count,
+        )
+
+    def _to_run_pydantic(self, orm: PipelineRunORM) -> PipelineRun:
+        run = PipelineRun(
+            id=orm.id,
+            paper_id=orm.paper_id,
+            status=RunStatus(orm.status),
+            started_at=orm.started_at.replace(tzinfo=timezone.utc)
+            if orm.started_at
+            else None,
+            completed_at=orm.completed_at.replace(tzinfo=timezone.utc)
+            if orm.completed_at
+            else None,
+            total_tokens=orm.total_tokens,
+            error=orm.error,
+            created_at=orm.created_at.replace(tzinfo=timezone.utc),
+            stages={},
+        )
+        if orm.stages:
+            for stage in orm.stages:
+                run.stages[stage.stage_name] = self._to_stage_pydantic(stage)
+        return run
 
     async def _ingest(
         self,
@@ -205,8 +244,10 @@ class PaperService:
             raise ValueError(f"Paper {paper_id} not found")
         return self._to_pydantic(orm)
 
-    async def list_papers(self, filters: dict[str, str] | None = None) -> list[Paper]:
-        """List papers with optional string matching filters."""
+    async def list_papers(
+        self, filters: dict[str, str] | None = None
+    ) -> list[PaperListItem]:
+        """List papers with optional filters and attach latest run."""
         stmt = select(PaperORM)
         # Note: simplistic filter example string
         if filters:
@@ -216,7 +257,29 @@ class PaperService:
 
         result = await self.db.execute(stmt)
         orms = result.scalars().all()
-        return [self._to_pydantic(orm) for orm in orms]
+        papers = [self._to_pydantic(orm) for orm in orms]
+        if not papers:
+            return []
+
+        paper_ids = [p.id for p in papers]
+        latest_runs_stmt = (
+            select(PipelineRunORM)
+            .where(PipelineRunORM.paper_id.in_(paper_ids))
+            .options(selectinload(PipelineRunORM.stages))
+            .order_by(PipelineRunORM.paper_id, desc(PipelineRunORM.created_at))
+        )
+        latest_runs_result = await self.db.execute(latest_runs_stmt)
+        latest_runs = latest_runs_result.scalars().all()
+
+        latest_run_map: dict[uuid.UUID, PipelineRun] = {}
+        for run_orm in latest_runs:
+            if run_orm.paper_id not in latest_run_map:
+                latest_run_map[run_orm.paper_id] = self._to_run_pydantic(run_orm)
+
+        return [
+            PaperListItem(paper=paper, latest_run=latest_run_map.get(paper.id))
+            for paper in papers
+        ]
 
     async def search_papers(self, query: str, limit: int = 5) -> list[Paper]:
         """Queries pgvector similarity search using LiteLLM."""

@@ -19,7 +19,7 @@ from src.api.dependencies import (
     PaperServiceDep,
 )
 from src.models.output import OutputBundle
-from src.models.paper import Paper
+from src.models.paper import Paper, PaperListItem
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
@@ -101,7 +101,7 @@ async def ingest_from_doi(
 
 @router.get(
     "",
-    response_model=list[Paper],
+    response_model=list[PaperListItem],
     summary="List all papers",
 )
 async def list_papers(
@@ -111,7 +111,7 @@ async def list_papers(
         None,
         description="Filter by source (pdf_upload, arxiv_url, doi)",
     ),
-) -> list[Paper]:
+) -> list[PaperListItem]:
     """Return all papers in the library, with optional source filter."""
     filters: dict[str, str] | None = {"source": source} if source else None
     return await paper_service.list_papers(filters)
@@ -192,8 +192,13 @@ async def get_code_source(
     export_service: ExportServiceDep,
     _user: CurrentUserDep,
 ) -> str:
-    data = await export_service.get_code_file(paper_id)
-    return data.decode("utf-8")
+    try:
+        data = await export_service.get_code_file(paper_id)
+        return data.decode("utf-8")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
 
 
 @router.get(
@@ -205,5 +210,10 @@ async def get_notebook(
     export_service: ExportServiceDep,
     _user: CurrentUserDep,
 ) -> Response:
-    data = await export_service.get_notebook(paper_id)
-    return Response(content=data, media_type="application/x-ipynb+json")
+    try:
+        data = await export_service.get_notebook(paper_id)
+        return Response(content=data, media_type="application/x-ipynb+json")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc

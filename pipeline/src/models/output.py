@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
+from src.domains.ai_ml.schema import AiMlExtraction
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +153,10 @@ class OutputBundle(BaseModel):
     report: ReportOutput | None = Field(
         None, description="Generated Markdown report, if reporting was run."
     )
+    extraction: AiMlExtraction | None = Field(
+        None,
+        description="Latest structured extraction for the paper, if available.",
+    )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -173,4 +178,5 @@ class OutputBundle(BaseModel):
             and len(self.diagrams) > 0
             and self.code is not None
             and self.report is not None
+            and self.extraction is not None
         )

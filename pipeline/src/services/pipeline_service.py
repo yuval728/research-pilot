@@ -8,14 +8,16 @@ import asyncio
 import uuid
 import uuid as uuid_pkg
 from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.db.models import PaperORM, PipelineRunORM, StageResultORM
+from src.db.session import get_db_context
 from src.graph.pipeline import research_pipeline
-from src.graph.state import make_initial_state
+from src.graph.state import PipelineState, make_initial_state
 from src.models.paper import PaperMetadata
 from src.models.run import PipelineRun, RunStatus, StageResult, StageStatus
 
@@ -64,6 +66,172 @@ class PipelineService:
                 run.stages[s.stage_name] = self._to_stage_pydantic(s)
         return run
 
+    @staticmethod
+    def _resolve_final_status(stage_orms: list[StageResultORM]) -> str:
+        statuses = {stage.status for stage in stage_orms}
+        success_statuses = {"completed", "cached", "skipped"}
+        has_success = any(status in success_statuses for status in statuses)
+        has_failure = "failed" in statuses
+        if has_failure and has_success:
+            return RunStatus.PARTIAL.value
+        if has_failure:
+            return RunStatus.FAILED.value
+        if has_success:
+            return RunStatus.COMPLETED.value
+        return RunStatus.FAILED.value
+
+    @staticmethod
+    def _extract_state(update_dict: dict[str, Any]) -> dict[str, Any] | None:
+        last_state: dict[str, Any] | None = None
+        for _, state in update_dict.items():
+            last_state = state
+        return last_state
+
+    async def _persist_stage_deltas(
+        self,
+        *,
+        session,
+        run_id: uuid.UUID,
+        stage_statuses: dict[str, Any],
+        token_usage: dict[str, int],
+        cached_stages: set[str],
+        errors: list[Any],
+    ) -> None:
+        if not stage_statuses:
+            return
+
+        existing_stmt = select(StageResultORM).where(StageResultORM.run_id == run_id)
+        existing_res = await session.execute(existing_stmt)
+        existing_rows = existing_res.scalars().all()
+        existing_by_stage = {row.stage_name: row for row in existing_rows}
+
+        now = datetime.now(timezone.utc)
+        for stage_name, status in stage_statuses.items():
+            status_val = status.value if hasattr(status, "value") else status
+            token_count = token_usage.get(stage_name)
+            cached = stage_name in cached_stages
+            error_message = next(
+                (
+                    err
+                    for err in errors
+                    if isinstance(err, str) and err.startswith(f"[{stage_name}]")
+                ),
+                None,
+            )
+
+            stage_orm = existing_by_stage.get(stage_name)
+            if stage_orm is None:
+                stage_orm = StageResultORM(
+                    run_id=run_id,
+                    stage_name=stage_name,
+                    status=status_val,
+                    started_at=now,
+                    cached=cached,
+                    token_count=token_count,
+                    error_message=error_message,
+                )
+                if status_val in ("completed", "failed", "cached", "skipped"):
+                    stage_orm.completed_at = now
+                session.add(stage_orm)
+                existing_by_stage[stage_name] = stage_orm
+                continue
+
+            # Persist only real deltas to avoid churn.
+            changed = False
+            if stage_orm.status != status_val:
+                stage_orm.status = status_val
+                changed = True
+            if stage_orm.cached != cached:
+                stage_orm.cached = cached
+                changed = True
+            if stage_orm.token_count != token_count:
+                stage_orm.token_count = token_count
+                changed = True
+            if stage_orm.error_message != error_message:
+                stage_orm.error_message = error_message
+                changed = True
+            if stage_orm.started_at is None:
+                stage_orm.started_at = now
+                changed = True
+            if (
+                status_val in ("completed", "failed", "cached", "skipped")
+                and stage_orm.completed_at is None
+            ):
+                stage_orm.completed_at = now
+                changed = True
+
+            if changed:
+                continue
+
+    async def _execute_pipeline_run(
+        self, run_id: uuid.UUID, initial_state: PipelineState
+    ) -> None:
+        try:
+            async with get_db_context() as session:
+                run_orm = await session.get(PipelineRunORM, run_id)
+                if run_orm:
+                    run_orm.status = RunStatus.RUNNING.value
+                    if run_orm.started_at is None:
+                        run_orm.started_at = datetime.now(timezone.utc)
+                    await session.commit()
+
+            async for update_dict in research_pipeline.astream(initial_state):
+                async with get_db_context() as session:
+                    run_orm = await session.get(PipelineRunORM, run_id)
+                    if not run_orm:
+                        continue
+
+                    last_state = self._extract_state(update_dict)
+                    if last_state is None:
+                        continue
+
+                    stage_statuses = dict(last_state.get("stage_statuses", {}))
+                    token_usage = dict(last_state.get("token_usage", {}))
+                    cached_stages = set(last_state.get("cached_stages", set()))
+                    errors = list(last_state.get("errors", []))
+
+                    await self._persist_stage_deltas(
+                        session=session,
+                        run_id=run_id,
+                        stage_statuses=stage_statuses,
+                        token_usage=token_usage,
+                        cached_stages=cached_stages,
+                        errors=errors,
+                    )
+
+                    await session.commit()
+
+            async with get_db_context() as session:
+                run_orm = await session.get(
+                    PipelineRunORM,
+                    run_id,
+                    options=[selectinload(PipelineRunORM.stages)],
+                )
+                if run_orm:
+                    run_orm.total_tokens = sum(
+                        stage.token_count or 0 for stage in run_orm.stages
+                    )
+                    run_orm.status = self._resolve_final_status(run_orm.stages)
+                    run_orm.error = next(
+                        (
+                            stage.error_message
+                            for stage in run_orm.stages
+                            if stage.error_message
+                        ),
+                        None,
+                    )
+                    run_orm.completed_at = datetime.now(timezone.utc)
+                    await session.commit()
+        except Exception as exc:
+            async with get_db_context() as session:
+                run_orm = await session.get(PipelineRunORM, run_id)
+                if run_orm:
+                    run_orm.status = RunStatus.FAILED.value
+                    run_orm.error = str(exc)
+                    run_orm.completed_at = datetime.now(timezone.utc)
+                    await session.commit()
+            raise
+
     async def trigger_run(self, paper_id: uuid.UUID) -> PipelineRun:
         """Sets up a new PipelineRunORM and invokes the LangGraph research pipeline in background."""
         paper_orm = await self.db.get(PaperORM, paper_id)
@@ -102,18 +270,7 @@ class PipelineService:
 
         # Trigger execution safely in background via asyncio
         loop = asyncio.get_running_loop()
-
-        async def _run_pipeline() -> None:
-            # We must create a new session or be aware that db session lifetime might end.
-            # In a robust system, the graph nodes would manage their own DB sessions.
-            try:
-                await research_pipeline.ainvoke(initial_state)  # type: ignore[arg-type]
-            except Exception:
-                # Basic top level catcher if it fails completely
-                # Graph usually catches in its nodes, but this ensures no silent deadlocks
-                pass
-
-        loop.create_task(_run_pipeline())
+        loop.create_task(self._execute_pipeline_run(run_id, initial_state))
 
         return self._to_run_pydantic(run_orm)
 
@@ -128,6 +285,20 @@ class PipelineService:
         orm = res.scalar_one_or_none()
         if not orm:
             raise ValueError(f"PipelineRun {run_id} not found")
+        return self._to_run_pydantic(orm)
+
+    async def get_latest_run_for_paper(self, paper_id: uuid.UUID) -> PipelineRun | None:
+        stmt = (
+            select(PipelineRunORM)
+            .where(PipelineRunORM.paper_id == paper_id)
+            .order_by(desc(PipelineRunORM.created_at))
+            .options(selectinload(PipelineRunORM.stages))
+            .limit(1)
+        )
+        res = await self.db.execute(stmt)
+        orm = res.scalar_one_or_none()
+        if orm is None:
+            return None
         return self._to_run_pydantic(orm)
 
     async def get_stage_result(self, run_id: uuid.UUID, stage_name: str) -> StageResult:
@@ -189,10 +360,4 @@ class PipelineService:
 
         loop = asyncio.get_running_loop()
 
-        async def _rerun_pipeline() -> None:
-            try:
-                await research_pipeline.ainvoke(initial_state)
-            except Exception:
-                pass
-
-        loop.create_task(_rerun_pipeline())
+        loop.create_task(self._execute_pipeline_run(run_id, initial_state))

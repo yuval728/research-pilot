@@ -1,19 +1,18 @@
+import { useEffect, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
-import { Download, FileCode, Database, Loader2 } from 'lucide-react';
+import { ChevronDown, Database, Download, FileCode, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { useState, useEffect } from 'react';
-import { cn } from '@/lib/utils';
-import { ChevronDown } from 'lucide-react';
 import { papersApi } from '@/lib/api/papers';
-import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 
 interface CodeViewerProps {
-  /** Paper UUID — used to fetch the code from the backend */
   paperId: string;
+  pythonPath: string | null;
   syntheticData: string;
 }
 
@@ -40,15 +39,20 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export function CodeViewer({ paperId, syntheticData }: CodeViewerProps) {
+export function CodeViewer({ paperId, pythonPath, syntheticData }: CodeViewerProps) {
   const [code, setCode] = useState('');
   const [isFetching, setIsFetching] = useState(true);
   const [showData, setShowData] = useState(false);
   const [downloading, setDownloading] = useState<'py' | 'ipynb' | null>(null);
 
-  // Fetch code source on mount
   useEffect(() => {
-    const fetch = async () => {
+    if (!pythonPath) {
+      setCode('# Code source not available yet.');
+      setIsFetching(false);
+      return;
+    }
+
+    const fetchSource = async () => {
       setIsFetching(true);
       try {
         const src = await papersApi.getCodeSource(paperId);
@@ -59,8 +63,8 @@ export function CodeViewer({ paperId, syntheticData }: CodeViewerProps) {
         setIsFetching(false);
       }
     };
-    fetch();
-  }, [paperId]);
+    fetchSource();
+  }, [paperId, pythonPath]);
 
   const handleDownloadPy = async () => {
     setDownloading('py');
@@ -87,7 +91,6 @@ export function CodeViewer({ paperId, syntheticData }: CodeViewerProps) {
 
   return (
     <div className="space-y-6">
-      {/* Header bar */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-primary/10 rounded-md">
@@ -106,7 +109,7 @@ export function CodeViewer({ paperId, syntheticData }: CodeViewerProps) {
             size="sm"
             className="h-8 border-[#1a1a1a] text-[10px] font-bold uppercase tracking-widest"
             onClick={handleDownloadPy}
-            disabled={!code || downloading === 'py'}
+            disabled={!pythonPath || !code || downloading === 'py'}
           >
             {downloading === 'py' ? (
               <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
@@ -132,7 +135,6 @@ export function CodeViewer({ paperId, syntheticData }: CodeViewerProps) {
         </div>
       </div>
 
-      {/* Code editor */}
       <Card className="border-[#1a1a1a] overflow-hidden rounded-xl">
         {isFetching ? (
           <div className="h-[500px] flex items-center justify-center bg-[#1e1e1e]">
@@ -150,7 +152,6 @@ export function CodeViewer({ paperId, syntheticData }: CodeViewerProps) {
         )}
       </Card>
 
-      {/* Synthetic data description */}
       <Collapsible
         open={showData}
         onOpenChange={setShowData}

@@ -1,42 +1,57 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
-  Download,
   CheckCircle2,
   Clock,
-  XCircle,
+  Download,
+  FileText,
   Loader2,
+  XCircle,
 } from 'lucide-react';
-import { Header } from '@/components/layout/header';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ExtractionTree } from '@/components/viewer/extraction-tree';
-import { SummaryTabs } from '@/components/viewer/summary-tabs';
-import { DiagramViewer } from '@/components/viewer/diagram-viewer';
-import { CodeViewer } from '@/components/viewer/code-viewer';
-import { papersApi } from '@/lib/api/papers';
-import { pipelineApi } from '@/lib/api/pipeline';
-import { Paper, OutputBundle, PipelineRun, StageResult } from '@/types';
-import { cn } from '@/lib/utils';
 import Markdown from 'react-markdown';
 import { toast } from 'sonner';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { CodeViewer } from '@/components/viewer/code-viewer';
+import { DiagramViewer } from '@/components/viewer/diagram-viewer';
+import { ExtractionTree } from '@/components/viewer/extraction-tree';
+import { SummaryTabs } from '@/components/viewer/summary-tabs';
+import { papersApi } from '@/lib/api/papers';
+import { pipelineApi } from '@/lib/api/pipeline';
 import { usePipelineSSE } from '@/lib/hooks/use-pipeline-sse';
+import { hasBundleOutputs, resolveViewerRunStatus, shouldStreamRun } from '@/lib/pipeline-status';
+import { cn } from '@/lib/utils';
+import { OutputBundle, Paper, PipelineRun, StageResult } from '@/types';
 
-// Canonical stage order matching the backend pipeline
 const STAGE_ORDER = [
-  'ingest', 'classify', 'extract', 'summarise',
-  'embed', 'diagram', 'codegen', 'report',
+  'ingest',
+  'classify',
+  'extract',
+  'summarise',
+  'embed',
+  'diagram',
+  'codegen',
+  'report',
 ] as const;
 
 const STAGE_LABELS: Record<string, string> = {
-  ingest: 'Ingest', classify: 'Classify', extract: 'Extract',
-  summarise: 'Summarize', embed: 'Embed', diagram: 'Diagram',
-  codegen: 'Code', report: 'Report',
+  ingest: 'Ingest',
+  classify: 'Classify',
+  extract: 'Extract',
+  summarise: 'Summarize',
+  embed: 'Embed',
+  diagram: 'Diagram',
+  codegen: 'Code',
+  report: 'Report',
 };
 
-/** Trigger a file download in the browser. */
+const initialLoadPromises = new Map<
+  string,
+  Promise<{ paper: Paper; bundle: OutputBundle; latestRun: PipelineRun | null }>
+>();
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -49,7 +64,7 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 function stageDuration(stage: StageResult | undefined): string {
-  if (!stage?.started_at || !stage?.completed_at) return '—';
+  if (!stage?.started_at || !stage?.completed_at) return '-';
   const secs =
     (new Date(stage.completed_at).getTime() - new Date(stage.started_at).getTime()) / 1000;
   return `${secs.toFixed(1)}s`;
@@ -66,56 +81,94 @@ export default function PaperViewerPage() {
   const [pipelineRunId, setPipelineRunId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Live pipeline updates
-  const { run: liveRun, done: runDone } = usePipelineSSE(pipelineRunId);
-  const activeRun = (liveRun ?? staticRun) as Partial<PipelineRun> | null;
+  const activeRun = (staticRun ?? null) as Partial<PipelineRun> | null;
+  const { run: liveRun, done: runDone } = usePipelineSSE(
+    shouldStreamRun(activeRun) ? pipelineRunId : null,
+  );
+  const resolvedRun = (liveRun ?? activeRun) as Partial<PipelineRun> | null;
 
-  // Auto-fetch bundle when pipeline completes
-  useEffect(() => {
-    if (runDone && (activeRun?.status === 'completed' || activeRun?.status === 'partial')) {
-      if (!id) return;
-      papersApi.getOutputBundle(id).then(setBundle).catch(console.error);
-      papersApi.getReportMarkdown(id).then(setReportMarkdown).catch(() => {});
+  const refreshOutputs = useCallback(async () => {
+    if (!id) return;
+    const bundleData = await papersApi.getOutputBundle(id);
+    setBundle(bundleData);
+    if (bundleData.report) {
+      try {
+        setReportMarkdown(await papersApi.getReportMarkdown(id));
+      } catch {
+        setReportMarkdown('');
+      }
+    } else {
+      setReportMarkdown('');
     }
-  }, [runDone, activeRun?.status, id]);
+  }, [id]);
 
-  // ── Initial data fetch ──────────────────────────────────────────────────
+  const refreshLatestRun = useCallback(async () => {
+    if (!id) return;
+    const latestRun = await pipelineApi.getLatestRunForPaper(id);
+    setStaticRun(latestRun);
+    setPipelineRunId(latestRun?.id ?? null);
+  }, [id]);
+
+  useEffect(() => {
+    if (
+      runDone &&
+      (resolvedRun?.status === 'completed' ||
+        resolvedRun?.status === 'partial' ||
+        resolvedRun?.status === 'failed')
+    ) {
+      refreshLatestRun().catch(console.error);
+      refreshOutputs().catch(console.error);
+    }
+  }, [refreshLatestRun, refreshOutputs, resolvedRun?.status, runDone]);
+
   useEffect(() => {
     const fetchData = async () => {
       if (!id) return;
       try {
-        const [paperData, bundleData] = await Promise.all([
-          papersApi.getPaper(id),
-          papersApi.getOutputBundle(id),
-        ]);
+        let loadPromise = initialLoadPromises.get(id);
+        if (!loadPromise) {
+          loadPromise = Promise.all([
+            papersApi.getPaper(id),
+            papersApi.getOutputBundle(id),
+            pipelineApi.getLatestRunForPaper(id),
+          ]).then(([paperData, bundleData, latestRun]) => ({
+            paper: paperData,
+            bundle: bundleData,
+            latestRun,
+          }));
+          initialLoadPromises.set(id, loadPromise);
+        }
+
+        const { paper: paperData, bundle: bundleData, latestRun } = await loadPromise;
         setPaper(paperData);
         setBundle(bundleData);
+        setStaticRun(latestRun);
+        setPipelineRunId(latestRun?.id ?? null);
 
-        // Fetch report markdown if available
         if (bundleData.report) {
           try {
-            const md = await papersApi.getReportMarkdown(id);
-            setReportMarkdown(md);
+            setReportMarkdown(await papersApi.getReportMarkdown(id));
           } catch {
-            // Report might not be ready yet
+            setReportMarkdown('');
           }
+        } else {
+          setReportMarkdown('');
         }
       } catch (error) {
         console.error('Failed to load paper:', error);
       } finally {
+        initialLoadPromises.delete(id);
         setIsLoading(false);
       }
     };
     fetchData();
   }, [id]);
 
-  // ── Download handlers ───────────────────────────────────────────────────
   const handleDownloadReport = useCallback(async () => {
     if (!id) return;
     try {
       const md = await papersApi.getReportMarkdown(id);
-      const blob = new Blob([md], { type: 'text/markdown' });
-      downloadBlob(blob, `${id}_report.md`);
+      downloadBlob(new Blob([md], { type: 'text/markdown' }), `${id}_report.md`);
     } catch {
       toast.error('Failed to download report');
     }
@@ -125,8 +178,7 @@ export default function PaperViewerPage() {
     if (!id) return;
     try {
       const code = await papersApi.getCodeSource(id);
-      const blob = new Blob([code], { type: 'text/x-python' });
-      downloadBlob(blob, `${id}_implementation.py`);
+      downloadBlob(new Blob([code], { type: 'text/x-python' }), `${id}_implementation.py`);
     } catch {
       toast.error('Failed to download code');
     }
@@ -142,7 +194,6 @@ export default function PaperViewerPage() {
     }
   }, [id]);
 
-  // ── Run pipeline if no outputs yet ─────────────────────────────────────
   const handleTriggerPipeline = useCallback(async () => {
     if (!id) return;
     try {
@@ -155,18 +206,10 @@ export default function PaperViewerPage() {
     }
   }, [id]);
 
-  // ── Loading skeleton ────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <div className="flex flex-col h-screen">
         <div className="h-16 border-b border-[#1a1a1a] animate-pulse bg-secondary/20" />
-        <div className="flex-1 p-8 flex gap-8">
-          <div className="flex-[0.65] space-y-8">
-            <div className="h-12 w-1/2 bg-secondary/20 rounded-lg animate-pulse" />
-            <div className="h-64 bg-secondary/20 rounded-xl animate-pulse" />
-          </div>
-          <div className="flex-[0.35] bg-secondary/10 rounded-xl animate-pulse" />
-        </div>
       </div>
     );
   }
@@ -180,13 +223,12 @@ export default function PaperViewerPage() {
     );
   }
 
-  const runStatus = activeRun?.status ?? 'completed';
-  const hasOutputs =
-    bundle && (bundle.summaries.length > 0 || bundle.diagrams.length > 0 || bundle.report);
+  const runStatus = resolveViewerRunStatus(resolvedRun, bundle);
+  const hasOutputs = hasBundleOutputs(bundle);
+  const isRunActive = runStatus === 'pending' || runStatus === 'running';
 
   return (
     <div className="flex flex-col min-h-screen">
-      {/* ── Sticky header ── */}
       <header className="border-b border-[#1a1a1a] bg-background/50 backdrop-blur-md sticky top-0 z-20">
         <div className="px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-6">
@@ -203,17 +245,6 @@ export default function PaperViewerPage() {
               <h1 className="text-xl font-bold tracking-tight">
                 {paper.metadata?.title ?? 'Untitled Paper'}
               </h1>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span>{paper.metadata?.authors?.join(', ')}</span>
-                {paper.metadata?.venue && (
-                  <>
-                    <span>•</span>
-                    <span>
-                      {paper.metadata.venue} {paper.metadata.year}
-                    </span>
-                  </>
-                )}
-              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -237,7 +268,7 @@ export default function PaperViewerPage() {
                   : 'bg-green-500/10 text-green-500',
               )}
             >
-              {runStatus === 'running' ? (
+              {runStatus === 'running' || runStatus === 'pending' ? (
                 <Loader2 className="w-3 h-3 animate-spin" />
               ) : runStatus === 'failed' ? (
                 <XCircle className="w-3 h-3" />
@@ -249,7 +280,6 @@ export default function PaperViewerPage() {
           </div>
         </div>
 
-        {/* Download actions */}
         <div className="px-8 pb-4 flex items-center gap-2">
           <Button
             variant="outline"
@@ -281,7 +311,7 @@ export default function PaperViewerPage() {
             <Download className="w-3.5 h-3.5 mr-2" />
             Notebook (.IPYNB)
           </Button>
-          {!hasOutputs && (
+          {!hasOutputs && !isRunActive && (
             <Button
               size="sm"
               className="h-8 bg-primary text-[10px] font-bold uppercase tracking-widest ml-auto"
@@ -293,21 +323,25 @@ export default function PaperViewerPage() {
         </div>
       </header>
 
-      {/* ── Body ── */}
       {!hasOutputs ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center space-y-4">
             <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto">
-              <Loader2 className="w-8 h-8 text-muted-foreground" />
+              {isRunActive ? (
+                <Loader2 className="w-8 h-8 text-muted-foreground animate-spin" />
+              ) : (
+                <FileText className="w-8 h-8 text-muted-foreground" />
+              )}
             </div>
             <p className="text-muted-foreground text-sm">
-              No outputs yet. Run the pipeline to generate analysis.
+              {isRunActive
+                ? 'Pipeline is running. Outputs will appear here as stages finish.'
+                : 'No outputs yet. Run the pipeline to generate analysis.'}
             </p>
           </div>
         </div>
       ) : (
         <div className="flex-1 flex gap-8 p-8 max-w-[1600px] mx-auto w-full overflow-hidden">
-          {/* Main content */}
           <div className="flex-[0.65] min-w-0">
             <Tabs defaultValue="summary" className="w-full">
               <TabsList className="bg-transparent border-b border-[#1a1a1a] w-full justify-start rounded-none h-12 p-0 gap-8">
@@ -335,7 +369,6 @@ export default function PaperViewerPage() {
                     <p className="text-muted-foreground text-sm">Summaries not yet generated.</p>
                   )}
                 </TabsContent>
-
                 <TabsContent value="diagrams" className="mt-0">
                   {bundle!.diagrams.length > 0 ? (
                     <DiagramViewer diagrams={bundle!.diagrams} />
@@ -343,25 +376,24 @@ export default function PaperViewerPage() {
                     <p className="text-muted-foreground text-sm">Diagrams not yet generated.</p>
                   )}
                 </TabsContent>
-
                 <TabsContent value="code" className="mt-0">
                   {bundle!.code ? (
                     <CodeViewer
                       paperId={id!}
+                      pythonPath={bundle!.code.python_path}
                       syntheticData={bundle!.code.synthetic_data_description ?? ''}
                     />
                   ) : (
                     <p className="text-muted-foreground text-sm">Code not yet generated.</p>
                   )}
                 </TabsContent>
-
                 <TabsContent value="report" className="mt-0">
                   {reportMarkdown ? (
                     <div className="prose prose-invert max-w-none markdown-body">
                       <Markdown>{reportMarkdown}</Markdown>
                     </div>
                   ) : bundle!.report ? (
-                    <p className="text-muted-foreground text-sm">Loading report…</p>
+                    <p className="text-muted-foreground text-sm">Loading report...</p>
                   ) : (
                     <p className="text-muted-foreground text-sm">Report not yet generated.</p>
                   )}
@@ -370,7 +402,6 @@ export default function PaperViewerPage() {
             </Tabs>
           </div>
 
-          {/* Sidebar */}
           <div className="flex-[0.35] min-w-[320px]">
             <div className="bg-[#0f0f0f] border border-[#1a1a1a] rounded-xl p-6 sticky top-40 h-[calc(100vh-12rem)] overflow-y-auto custom-scrollbar">
               {bundle!.extraction ? (
@@ -385,8 +416,7 @@ export default function PaperViewerPage() {
         </div>
       )}
 
-      {/* Pipeline Timeline */}
-      {activeRun && (
+      {resolvedRun && (
         <div className="px-8 py-6 border-t border-[#1a1a1a] bg-[#050505]">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
@@ -403,17 +433,17 @@ export default function PaperViewerPage() {
           </div>
           <div className="flex items-center gap-1">
             {STAGE_ORDER.map((stageKey) => {
-              const stages = activeRun.stages ?? {};
+              const stages = resolvedRun.stages ?? {};
               const stage = stages[stageKey];
-              const s = stage?.status;
+              const status = stage?.status;
               const color =
-                s === 'completed'
+                status === 'completed'
                   ? 'bg-green-500'
-                  : s === 'cached'
+                  : status === 'cached'
                   ? 'bg-blue-500'
-                  : s === 'failed'
+                  : status === 'failed'
                   ? 'bg-destructive'
-                  : s === 'running'
+                  : status === 'running'
                   ? 'bg-primary animate-pulse'
                   : 'bg-muted';
               return (
@@ -424,7 +454,7 @@ export default function PaperViewerPage() {
                       {STAGE_LABELS[stageKey]}
                     </span>
                     <span className="text-[9px] font-medium text-muted-foreground/50">
-                      {s === 'cached' ? 'CACHED' : stageDuration(stage)}
+                      {status === 'cached' ? 'CACHED' : stageDuration(stage)}
                     </span>
                   </div>
                 </div>

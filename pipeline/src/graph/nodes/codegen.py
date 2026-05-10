@@ -263,13 +263,24 @@ async def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
         from src.db.session import get_db_context
 
         async with get_db_context() as session:
-            row = OutputORM(
-                id=uuid.uuid4(),
-                paper_id=uuid.UUID(paper_id),
-                output_type="codegen",
-                storage_path=code_output.python_path or "inline:model.py",
-            )
-            session.add(row)
+            if code_output.python_path:
+                session.add(
+                    OutputORM(
+                        id=uuid.uuid4(),
+                        paper_id=uuid.UUID(paper_id),
+                        output_type="code_python",
+                        storage_path=code_output.python_path,
+                    )
+                )
+            if code_output.notebook_path:
+                session.add(
+                    OutputORM(
+                        id=uuid.uuid4(),
+                        paper_id=uuid.UUID(paper_id),
+                        output_type="code_notebook",
+                        storage_path=code_output.notebook_path,
+                    )
+                )
             await session.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("codegen_store_failed", reason=str(exc))
@@ -285,18 +296,24 @@ async def _load_cached_code(paper_id: str) -> CodeOutput | None:
 
         async with get_db_context() as session:
             stmt = (
-                select(OutputORM.storage_path)
+                select(OutputORM.output_type, OutputORM.storage_path)
                 .where(OutputORM.paper_id == uuid.UUID(paper_id))
-                .where(OutputORM.output_type == "codegen")
-                .limit(1)
+                .where(OutputORM.output_type.in_(("code_python", "code_notebook")))
             )
             res = await session.execute(stmt)
-            path = res.scalar_one_or_none()
-            if path:
+            rows = res.all()
+            if rows:
+                python_path = None
+                notebook_path = None
+                for output_type, storage_path in rows:
+                    if output_type == "code_python":
+                        python_path = storage_path
+                    elif output_type == "code_notebook":
+                        notebook_path = storage_path
                 return CodeOutput(
                     paper_id=uuid.UUID(paper_id),
-                    python_path=path if not path.startswith("inline:") else None,
-                    notebook_path=None,
+                    python_path=python_path,
+                    notebook_path=notebook_path,
                     synthetic_data_description=None,
                 )
     except Exception as exc:  # noqa: BLE001

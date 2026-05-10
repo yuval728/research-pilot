@@ -25,6 +25,10 @@ export const pipelineApi = {
     return apiFetch(`/api/v1/pipeline/runs/${runId}`);
   },
 
+  async getLatestRunForPaper(paperId: string): Promise<PipelineRun | null> {
+    return apiFetch(`/api/v1/pipeline/papers/${paperId}/latest-run`);
+  },
+
   /**
    * Retry a single failed stage.
    * POST /api/v1/pipeline/runs/{run_id}/stages/{stage_name}/retry

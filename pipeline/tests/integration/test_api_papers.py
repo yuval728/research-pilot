@@ -17,7 +17,9 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from src.models.paper import Paper, PaperSource
+from src.domains.ai_ml.schema import AiMlExtraction
+from src.models.output import OutputBundle
+from src.models.paper import Paper, PaperListItem, PaperSource
 
 
 @pytest.fixture
@@ -47,12 +49,12 @@ def test_list_papers(test_client: TestClient):
         "pipeline.services.paper_service.PaperService.list_papers",
         new_callable=AsyncMock,
     ) as mock_list:
-        mock_list.return_value = [mock_paper]
+        mock_list.return_value = [PaperListItem(paper=mock_paper, latest_run=None)]
         response = test_client.get("/api/v1/papers")
 
     assert response.status_code == status.HTTP_200_OK
     assert len(response.json()) == 1
-    assert response.json()[0]["id"] == str(paper_id)
+    assert response.json()[0]["paper"]["id"] == str(paper_id)
 
 
 def test_get_paper_success(test_client: TestClient):
@@ -128,3 +130,54 @@ def test_delete_paper(test_client: TestClient):
 
     assert response.status_code == status.HTTP_204_NO_CONTENT
     mock_delete.assert_called_once_with(paper_id)
+
+
+def test_get_paper_outputs_includes_extraction(test_client: TestClient):
+    paper_id = uuid.uuid4()
+    bundle = OutputBundle(
+        paper_id=paper_id,
+        summaries=[],
+        diagrams=[],
+        code=None,
+        report=None,
+        extraction=AiMlExtraction(
+            task="machine translation",
+            problem_statement="Improve sequence transduction quality.",
+            key_contributions=["attention-only encoder-decoder"],
+            architecture_components=[],
+            datasets=[],
+            evaluation_metrics=[],
+        ),
+    )
+
+    with patch(
+        "pipeline.services.export_service.ExportService.get_output_bundle",
+        new_callable=AsyncMock,
+    ) as mock_bundle:
+        mock_bundle.return_value = bundle
+        response = test_client.get(f"/api/v1/papers/{paper_id}/outputs")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["extraction"]["task"] == "machine translation"
+
+
+def test_get_code_source_missing_returns_404(test_client: TestClient):
+    paper_id = uuid.uuid4()
+    with patch(
+        "pipeline.services.export_service.ExportService.get_code_file",
+        new_callable=AsyncMock,
+    ) as mock_get:
+        mock_get.side_effect = ValueError("No code_python found for paper")
+        response = test_client.get(f"/api/v1/papers/{paper_id}/outputs/code.py")
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+def test_get_notebook_missing_returns_404(test_client: TestClient):
+    paper_id = uuid.uuid4()
+    with patch(
+        "pipeline.services.export_service.ExportService.get_notebook",
+        new_callable=AsyncMock,
+    ) as mock_get:
+        mock_get.side_effect = ValueError("No code_notebook found for paper")
+        response = test_client.get(f"/api/v1/papers/{paper_id}/outputs/notebook.ipynb")
+    assert response.status_code == status.HTTP_404_NOT_FOUND

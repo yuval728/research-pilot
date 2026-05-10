@@ -1,4 +1,4 @@
-import { Paper, OutputBundle } from '@/types';
+import { Paper, OutputBundle, PaperListItem } from '@/types';
 import { API_BASE_URL } from '../config';
 import { apiFetch, getAccessToken } from './http';
 
@@ -7,7 +7,7 @@ function ensureApi() {
 }
 
 export const papersApi = {
-  async listPapers(filters?: Record<string, string>): Promise<Paper[]> {
+  async listPapers(filters?: Record<string, string>): Promise<PaperListItem[]> {
     ensureApi();
     const params = filters
       ? '?' + new URLSearchParams(filters).toString()

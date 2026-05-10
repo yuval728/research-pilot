@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom';
-import { GitBranch, Code2, FileText, ChevronRight } from 'lucide-react';
+import { ChevronRight, Code2, FileText, GitBranch } from 'lucide-react';
 import { Paper, PipelineRun } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
+import { toDisplayStatus } from '@/lib/pipeline-status';
 import { cn } from '@/lib/utils';
 
 interface PaperCardProps {
@@ -11,20 +12,7 @@ interface PaperCardProps {
   pipelineRun?: PipelineRun | null;
 }
 
-/** Map backend lowercase run status → display variant */
 type DisplayStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
-
-function toDisplayStatus(run?: PipelineRun | null): DisplayStatus {
-  if (!run) return 'COMPLETED'; // Assume completed if no run record fetched
-  switch (run.status) {
-    case 'pending': return 'PENDING';
-    case 'running': return 'RUNNING';
-    case 'completed':
-    case 'partial': return 'COMPLETED';
-    case 'failed': return 'FAILED';
-    default: return 'COMPLETED';
-  }
-}
 
 export function PaperCard({ paper, pipelineRun }: PaperCardProps) {
   const status = toDisplayStatus(pipelineRun);
@@ -132,10 +120,10 @@ export function PaperCard({ paper, pipelineRun }: PaperCardProps) {
 
 function StatusBadge({ status }: { status: DisplayStatus }) {
   const configs: Record<DisplayStatus, { label: string; color: string }> = {
-    PENDING:   { label: 'Pending',   color: 'bg-muted text-muted-foreground' },
-    RUNNING:   { label: 'Running',   color: 'bg-primary/20 text-primary' },
+    PENDING: { label: 'Pending', color: 'bg-muted text-muted-foreground' },
+    RUNNING: { label: 'Running', color: 'bg-primary/20 text-primary' },
     COMPLETED: { label: 'Completed', color: 'bg-green-500/10 text-green-500' },
-    FAILED:    { label: 'Failed',    color: 'bg-destructive/10 text-destructive' },
+    FAILED: { label: 'Failed', color: 'bg-destructive/10 text-destructive' },
   };
 
   const config = configs[status];
@@ -147,9 +135,7 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
         config.color,
       )}
     >
-      {status === 'RUNNING' && (
-        <div className="w-1 h-1 bg-primary rounded-full animate-ping" />
-      )}
+      {status === 'RUNNING' && <div className="w-1 h-1 bg-primary rounded-full animate-ping" />}
       {config.label}
     </div>
   );
