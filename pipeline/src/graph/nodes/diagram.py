@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any
 
 import litellm  # type: ignore[import-untyped]
-from jinja2 import Environment
 from pydantic import BaseModel, Field
 
 
@@ -39,10 +38,10 @@ from src.core.utils import extract_json
 from src.db.engine import get_supabase_client
 from src.db.models import OutputORM
 from src.domains.ai_ml.schema import AiMlExtraction
+from src.graph.nodes._base import NodeContext, render_prompt
 from src.graph.state import PipelineState
 from src.models.output import DiagramOutput, DiagramType
-from src.models.run import StageStatus
-from src.core.events import Event, EventType, default_bus
+from src.services.converters import OutputDeserializer
 
 _STAGE = "diagram"
 _PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "diagram_v1.j2"
@@ -152,28 +151,6 @@ async def _validate_mermaid(dsl: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-async def _render_prompt(
-    extraction: AiMlExtraction,
-    diagram_type: DiagramType,
-) -> str:
-    """Render diagram_v1.j2 for the given diagram type."""
-    import aiofiles  # type: ignore[import-untyped]
-
-    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
-        template_str = await f.read()
-
-    env = Environment(autoescape=False)
-    template = env.from_string(template_str)
-    return template.render(
-        architecture_components=[
-            c.model_dump() for c in extraction.architecture_components
-        ],
-        training_procedure=extraction.training_procedure,
-        proposed_method_summary=extraction.proposed_method_summary,
-        diagram_type=diagram_type.value,
-    )
 
 
 async def _call_gemini_diagram_async(
@@ -366,32 +343,7 @@ async def _load_cached_diagrams(paper_id: str) -> list[DiagramOutput]:
 
             diagrams: list[DiagramOutput] = []
             for orm in orms:
-                level_str = orm.output_type.replace("diagram_", "")
-                svg_path = orm.storage_path
-                dsl_code = "DSL Code Omitted"
-                if orm.storage_path.startswith("json:"):
-                    import json
-
-                    try:
-                        data = json.loads(orm.storage_path[5:])
-                        dsl_code = data.get("dsl_code", dsl_code)
-                        svg_path = data.get("svg_path")
-                    except Exception:
-                        pass
-                elif orm.storage_path.startswith("inline:"):
-                    dsl_code = orm.storage_path[len("inline:") :]
-                    svg_path = None
-                    if dsl_code == level_str:
-                        dsl_code = "DSL Code Omitted"
-
-                diagrams.append(
-                    DiagramOutput(
-                        paper_id=uuid.UUID(paper_id),
-                        diagram_type=DiagramType(level_str),
-                        dsl_code=dsl_code,
-                        svg_path=svg_path,
-                    )
-                )
+                diagrams.append(OutputDeserializer.parse_diagram(orm))
             return diagrams
     except Exception as exc:  # noqa: BLE001
         log.debug("diagram_cache_miss", reason=str(exc))
@@ -419,67 +371,55 @@ async def diagram_node(state: PipelineState) -> dict[str, Any]:
     - ``token_usage["diagram"]``
     - ``errors`` — appended on failure
     """
-    run_id = state["run_id"]
-    paper_id: str | None = state.get("paper_id")
-    extraction: AiMlExtraction | None = state.get("extraction")
-    errors: list[str] = list(state.get("errors", []))
-    stage_statuses: dict[str, StageStatus] = dict(state.get("stage_statuses", {}))
-    token_usage: dict[str, int] = dict(state.get("token_usage", {}))
+    ctx = NodeContext(state, _STAGE)
+    ctx.mark_running()
 
-    log.info("diagram_node.started", run_id=run_id)
-    stage_statuses[_STAGE] = StageStatus.RUNNING
-
-    cached_stages: set[str] = set(state.get("cached_stages", set()))
+    raw_extraction = state.get("extraction")
+    extraction = (
+        AiMlExtraction.model_validate(raw_extraction) if raw_extraction else None
+    )
 
     # ── 1. Cache check ───────────────────────────────────────────────────────
-    from src.core.config import get_settings
-
-    settings = get_settings()
-
-    if settings.pipeline.cache_enabled and paper_id:
-        cached_diagrams = await _load_cached_diagrams(paper_id)
+    if ctx.settings.pipeline.cache_enabled and ctx.paper_id:
+        cached_diagrams = await _load_cached_diagrams(ctx.paper_id)
         if cached_diagrams:
-            log.info("diagram_node.cache_hit", run_id=run_id)
-            stage_statuses[_STAGE] = StageStatus.CACHED
-            cached_stages.add(_STAGE)
-
-            default_bus.emit(
-                Event(
-                    type=EventType.STAGE_COMPLETED,
-                    run_id=run_id,
-                    stage_name=_STAGE,
-                    payload={"cached": True},
-                )
-            )
             return {
                 "diagrams": cached_diagrams,
-                "stage_statuses": stage_statuses,
-                "cached_stages": cached_stages,
+                **ctx.mark_cached(),
             }
 
     if extraction is None:
-        msg = f"[{_STAGE}] extraction is None — skipping."
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.SKIPPED
-        log.warning("diagram_node.skipped", run_id=run_id, reason="no extraction")
-        return {"stage_statuses": stage_statuses, "errors": errors, "diagrams": []}
+        return {
+            "diagrams": [],
+            **ctx.mark_skipped("extraction is None — skipping."),
+        }
 
     try:
-        settings = get_settings()
-        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
+        collector = TelemetryCollector(run_id=ctx.run_id, paper_id=ctx.paper_id)
         diagram_types = list(DiagramType)
 
         # Pre-render prompts sequentially
-        prompts = [await _render_prompt(extraction, dt) for dt in diagram_types]
+        prompts = [
+            render_prompt(
+                _PROMPT_PATH,
+                architecture_components=[
+                    c.model_dump() for c in extraction.architecture_components
+                ],
+                training_procedure=extraction.training_procedure,
+                proposed_method_summary=extraction.proposed_method_summary,
+                diagram_type=dt.value,
+            )
+            for dt in diagram_types
+        ]
 
         # ── Parallel LLM calls: all 3 diagram types at once ───────────────
         tasks = [
             _call_gemini_diagram_async(
                 prompt,
                 dt,
-                run_id,
-                collector,
-                settings.gemini.max_retries,
+                run_id=ctx.run_id,
+                collector=collector,
+                max_retries=ctx.settings.gemini.max_retries,
             )
             for prompt, dt in zip(prompts, diagram_types)
         ]
@@ -488,12 +428,12 @@ async def diagram_node(state: PipelineState) -> dict[str, Any]:
         diagrams: list[DiagramOutput] = []
         for diagram_type, dsl in zip(diagram_types, dsls):
             svg_path: str | None = None
-            if paper_id:
+            if ctx.paper_id:
                 log.info("diagram_node.rendering_svg", type=diagram_type.value)
-                svg_path = await _upload_svg(paper_id, diagram_type, dsl)
+                svg_path = await _upload_svg(ctx.paper_id, diagram_type, dsl)
 
             diagram = DiagramOutput(
-                paper_id=uuid.UUID(paper_id) if paper_id else uuid.uuid4(),
+                paper_id=uuid.UUID(ctx.paper_id) if ctx.paper_id else uuid.uuid4(),
                 diagram_type=diagram_type,
                 dsl_code=dsl,
                 svg_path=svg_path,
@@ -501,48 +441,30 @@ async def diagram_node(state: PipelineState) -> dict[str, Any]:
             )
             diagrams.append(diagram)
 
-            if paper_id:
-                await _store_diagram(paper_id, diagram)
+            if ctx.paper_id:
+                await _store_diagram(ctx.paper_id, diagram)
 
             log.info(
                 "diagram_node.diagram_done",
-                run_id=run_id,
+                run_id=ctx.run_id,
                 diagram_type=diagram_type.value,
                 has_svg=svg_path is not None,
                 dsl_lines=len(dsl.splitlines()),
             )
 
-        token_usage[_STAGE] = collector.total_tokens
-        stage_statuses[_STAGE] = StageStatus.COMPLETED
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_COMPLETED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"diagram_count": len(diagrams), "tokens": token_usage[_STAGE]},
-            )
-        )
+        ctx.token_usage[_STAGE] = collector.total_tokens
 
-        log.info("diagram_node.completed", run_id=run_id, count=len(diagrams))
+        log.info("diagram_node.completed", run_id=ctx.run_id, count=len(diagrams))
 
         return {
             "diagrams": diagrams,
-            "stage_statuses": stage_statuses,
-            "token_usage": token_usage,
-            "errors": errors,
+            **ctx.mark_completed(
+                {"diagram_count": len(diagrams), "tokens": ctx.token_usage[_STAGE]}
+            ),
         }
 
     except Exception as exc:  # noqa: BLE001
-        log.exception("diagram_node.failed", run_id=run_id, error=str(exc))
-        msg = f"[{_STAGE}] {exc}"
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.FAILED
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_FAILED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"error": str(exc)},
-            )
-        )
-        return {"stage_statuses": stage_statuses, "errors": errors, "diagrams": []}
+        return {
+            "diagrams": [],
+            **ctx.mark_failed(exc),
+        }

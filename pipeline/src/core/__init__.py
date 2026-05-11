@@ -8,7 +8,7 @@ from src.core.events import Event, EventBus, EventType
 from src.core.exceptions import (
     DuplicatePaperError,
     EmbeddingError,
-    FileNotFoundError,
+    StorageFileNotFoundError,
     FileUploadError,
     IngestionError,
     LLMError,
@@ -39,7 +39,7 @@ __all__ = [
     "StageError",
     "DuplicatePaperError",
     "EmbeddingError",
-    "FileNotFoundError",
+    "StorageFileNotFoundError",
     "FileUploadError",
     "IngestionError",
     "LLMError",

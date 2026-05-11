@@ -6,7 +6,6 @@ Business logic for managing LangGraph pipeline runs and viewing statuses.
 
 import asyncio
 import uuid
-import uuid as uuid_pkg
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,41 +29,15 @@ class PipelineService:
 
     def _to_stage_pydantic(self, orm: StageResultORM) -> StageResult:
         """Convert StageResultORM to StageResult."""
-        return StageResult(
-            stage_name=orm.stage_name,
-            status=StageStatus(orm.status),
-            started_at=orm.started_at.replace(tzinfo=timezone.utc)
-            if orm.started_at
-            else None,
-            completed_at=orm.completed_at.replace(tzinfo=timezone.utc)
-            if orm.completed_at
-            else None,
-            error_message=orm.error_message,
-            cached=orm.cached,
-            token_count=orm.token_count,
-        )
+        from src.services.converters import stage_orm_to_pydantic
+
+        return stage_orm_to_pydantic(orm)
 
     def _to_run_pydantic(self, orm: PipelineRunORM) -> PipelineRun:
         """Convert PipelineRunORM to PipelineRun, including its stages."""
-        run = PipelineRun(
-            id=orm.id,
-            paper_id=orm.paper_id,
-            status=RunStatus(orm.status),
-            started_at=orm.started_at.replace(tzinfo=timezone.utc)
-            if orm.started_at
-            else None,
-            completed_at=orm.completed_at.replace(tzinfo=timezone.utc)
-            if orm.completed_at
-            else None,
-            total_tokens=orm.total_tokens,
-            error=orm.error,
-            created_at=orm.created_at.replace(tzinfo=timezone.utc),
-            stages={},
-        )
-        if orm.stages:
-            for s in orm.stages:
-                run.stages[s.stage_name] = self._to_stage_pydantic(s)
-        return run
+        from src.services.converters import run_orm_to_pydantic
+
+        return run_orm_to_pydantic(orm)
 
     @staticmethod
     def _resolve_final_status(stage_orms: list[StageResultORM]) -> str:
@@ -137,31 +110,17 @@ class PipelineService:
                 continue
 
             # Persist only real deltas to avoid churn.
-            changed = False
-            if stage_orm.status != status_val:
-                stage_orm.status = status_val
-                changed = True
-            if stage_orm.cached != cached:
-                stage_orm.cached = cached
-                changed = True
-            if stage_orm.token_count != token_count:
-                stage_orm.token_count = token_count
-                changed = True
-            if stage_orm.error_message != error_message:
-                stage_orm.error_message = error_message
-                changed = True
+            stage_orm.status = status_val
+            stage_orm.cached = cached
+            stage_orm.token_count = token_count
+            stage_orm.error_message = error_message
             if stage_orm.started_at is None:
                 stage_orm.started_at = now
-                changed = True
             if (
                 status_val in ("completed", "failed", "cached", "skipped")
                 and stage_orm.completed_at is None
             ):
                 stage_orm.completed_at = now
-                changed = True
-
-            if changed:
-                continue
 
     async def _execute_pipeline_run(
         self, run_id: uuid.UUID, initial_state: PipelineState
@@ -238,7 +197,7 @@ class PipelineService:
         if not paper_orm:
             raise ValueError(f"Paper {paper_id} not found")
 
-        run_id = uuid_pkg.uuid4()
+        run_id = uuid.uuid4()
         run_orm = PipelineRunORM(
             id=run_id,
             paper_id=paper_id,
@@ -270,9 +229,25 @@ class PipelineService:
 
         # Trigger execution safely in background via asyncio
         loop = asyncio.get_running_loop()
-        loop.create_task(self._execute_pipeline_run(run_id, initial_state))
+        task = loop.create_task(self._execute_pipeline_run(run_id, initial_state))
+        task.add_done_callback(self._on_pipeline_task_done)
 
         return self._to_run_pydantic(run_orm)
+
+    @staticmethod
+    def _on_pipeline_task_done(task: asyncio.Task) -> None:
+        """Log unhandled exceptions from background pipeline tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            import structlog
+
+            structlog.get_logger("pipeline_service").error(
+                "background_pipeline_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     async def get_run_status(self, run_id: uuid.UUID) -> PipelineRun:
         """Fetches a run configuration and all stage outcomes."""
@@ -359,5 +334,5 @@ class PipelineService:
         )
 
         loop = asyncio.get_running_loop()
-
-        loop.create_task(self._execute_pipeline_run(run_id, initial_state))
+        task = loop.create_task(self._execute_pipeline_run(run_id, initial_state))
+        task.add_done_callback(self._on_pipeline_task_done)

@@ -30,7 +30,6 @@ import litellm  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
 
-from jinja2 import Environment
 from src.db.engine import get_supabase_client
 
 from src.core.config import get_settings
@@ -38,11 +37,11 @@ from src.core.logger import get_logger
 from src.core.telemetry import TelemetryCollector, track_llm_call
 from src.core.utils import extract_json
 from src.db.models import OutputORM
+from src.graph.nodes._base import NodeContext, render_prompt
 from src.graph.state import PipelineState
 from src.domains.ai_ml.schema import AiMlExtraction
 from src.models.output import CodeOutput
-from src.models.run import StageStatus
-from src.core.events import Event, EventType, default_bus
+from src.services.converters import OutputDeserializer
 
 _STAGE = "codegen"
 _PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "codegen_v1.j2"
@@ -84,27 +83,6 @@ def _validate_python(code: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-async def _render_prompt(extraction: AiMlExtraction) -> str:
-    """Render codegen_v1.j2 with extraction data."""
-    import aiofiles  # type: ignore[import-untyped]
-
-    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
-        template_str = await f.read()
-
-    env = Environment(autoescape=False)
-    template = env.from_string(template_str)
-    return template.render(
-        task=extraction.task,
-        proposed_method_summary=extraction.proposed_method_summary,
-        architecture_components=[
-            c.model_dump() for c in extraction.architecture_components
-        ],
-        training_procedure=extraction.training_procedure,
-        loss_functions=extraction.loss_functions,
-        datasets=[d.model_dump() for d in extraction.datasets],
-    )
 
 
 async def _call_gemini_codegen(
@@ -296,26 +274,14 @@ async def _load_cached_code(paper_id: str) -> CodeOutput | None:
 
         async with get_db_context() as session:
             stmt = (
-                select(OutputORM.output_type, OutputORM.storage_path)
+                select(OutputORM)
                 .where(OutputORM.paper_id == uuid.UUID(paper_id))
                 .where(OutputORM.output_type.in_(("code_python", "code_notebook")))
             )
             res = await session.execute(stmt)
-            rows = res.all()
+            rows = res.scalars().all()
             if rows:
-                python_path = None
-                notebook_path = None
-                for output_type, storage_path in rows:
-                    if output_type == "code_python":
-                        python_path = storage_path
-                    elif output_type == "code_notebook":
-                        notebook_path = storage_path
-                return CodeOutput(
-                    paper_id=uuid.UUID(paper_id),
-                    python_path=python_path,
-                    notebook_path=notebook_path,
-                    synthetic_data_description=None,
-                )
+                return OutputDeserializer.parse_code(rows)
     except Exception as exc:  # noqa: BLE001
         log.debug("codegen_cache_miss", reason=str(exc))
     return None
@@ -340,76 +306,63 @@ async def codegen_node(state: PipelineState) -> dict[str, Any]:
     - ``token_usage["codegen"]``
     - ``errors`` — appended on failure
     """
-    run_id = state["run_id"]
-    paper_id: str | None = state.get("paper_id")
-    extraction: AiMlExtraction | None = state.get("extraction")
+    ctx = NodeContext(state, _STAGE)
+    ctx.mark_running()
+
+    raw_extraction = state.get("extraction")
+    extraction = (
+        AiMlExtraction.model_validate(raw_extraction) if raw_extraction else None
+    )
     paper_metadata = state.get("paper_metadata")
-    errors: list[str] = list(state.get("errors", []))
-    stage_statuses: dict[str, StageStatus] = dict(state.get("stage_statuses", {}))
-    token_usage: dict[str, int] = dict(state.get("token_usage", {}))
-
-    log.info("codegen_node.started", run_id=run_id)
-    stage_statuses[_STAGE] = StageStatus.RUNNING
-
-    cached_stages: set[str] = set(state.get("cached_stages", set()))
 
     # ── 1. Cache check ───────────────────────────────────────────────────────
-    from src.core.config import get_settings
-
-    settings = get_settings()
-
-    if settings.pipeline.cache_enabled and paper_id:
-        cached_code = await _load_cached_code(paper_id)
+    if ctx.settings.pipeline.cache_enabled and ctx.paper_id:
+        cached_code = await _load_cached_code(ctx.paper_id)
         if cached_code:
-            log.info("codegen_node.cache_hit", run_id=run_id)
-            stage_statuses[_STAGE] = StageStatus.CACHED
-            cached_stages.add(_STAGE)
-
-            default_bus.emit(
-                Event(
-                    type=EventType.STAGE_COMPLETED,
-                    run_id=run_id,
-                    stage_name=_STAGE,
-                    payload={"cached": True},
-                )
-            )
             return {
                 "code_output": cached_code,
-                "stage_statuses": stage_statuses,
-                "cached_stages": cached_stages,
+                **ctx.mark_cached(),
             }
 
     if extraction is None:
-        msg = f"[{_STAGE}] extraction is None — skipping."
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.SKIPPED
-        log.warning("codegen_node.skipped", run_id=run_id, reason="no extraction")
-        return {"stage_statuses": stage_statuses, "errors": errors, "code_output": None}
+        return {
+            "code_output": None,
+            **ctx.mark_skipped("extraction is None — skipping."),
+        }
 
     try:
-        settings = get_settings()
-        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
+        collector = TelemetryCollector(run_id=ctx.run_id, paper_id=ctx.paper_id)
 
         # ── 1. Render prompt and generate code ───────────────────────────
-        prompt = await _render_prompt(extraction)
+        prompt = render_prompt(
+            _PROMPT_PATH,
+            task=extraction.task,
+            proposed_method_summary=extraction.proposed_method_summary,
+            architecture_components=[
+                c.model_dump() for c in extraction.architecture_components
+            ],
+            training_procedure=extraction.training_procedure,
+            loss_functions=extraction.loss_functions,
+            datasets=[d.model_dump() for d in extraction.datasets],
+        )
         python_code = await _call_gemini_codegen(
-            prompt, run_id, collector, max_retries=settings.gemini.max_retries
+            prompt, ctx.run_id, collector, max_retries=ctx.settings.gemini.max_retries
         )
 
-        token_usage[_STAGE] = collector.total_tokens
+        ctx.token_usage[_STAGE] = collector.total_tokens
 
         # ── 2. Build notebook ────────────────────────────────────────────
         notebook_bytes = _build_notebook(python_code, paper_metadata)
 
         # ── 3. Upload artefacts ──────────────────────────────────────────
         py_path, nb_path = None, None
-        if paper_id:
+        if ctx.paper_id:
             py_path, nb_path = await _upload_artefacts(
-                paper_id, python_code, notebook_bytes
+                ctx.paper_id, python_code, notebook_bytes
             )
 
         # ── 4. Build CodeOutput ──────────────────────────────────────────
-        paper_uuid = uuid.UUID(paper_id) if paper_id else uuid.uuid4()
+        paper_uuid = uuid.UUID(ctx.paper_id) if ctx.paper_id else uuid.uuid4()
         code_output = CodeOutput(
             paper_id=paper_uuid,
             python_path=py_path,
@@ -420,49 +373,30 @@ async def codegen_node(state: PipelineState) -> dict[str, Any]:
             ),
         )
 
-        if paper_id:
-            await _store_code_output(paper_id, code_output)
+        if ctx.paper_id:
+            await _store_code_output(ctx.paper_id, code_output)
 
         # ── 5. Emit event ────────────────────────────────────────────────
-        stage_statuses[_STAGE] = StageStatus.COMPLETED
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_COMPLETED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={
-                    "py_path": py_path,
-                    "nb_path": nb_path,
-                    "tokens": token_usage[_STAGE],
-                },
-            )
-        )
-
         log.info(
             "codegen_node.completed",
-            run_id=run_id,
+            run_id=ctx.run_id,
             py_path=py_path,
-            tokens=token_usage[_STAGE],
+            tokens=ctx.token_usage[_STAGE],
         )
 
         return {
             "code_output": code_output,
-            "stage_statuses": stage_statuses,
-            "token_usage": token_usage,
-            "errors": errors,
+            **ctx.mark_completed(
+                {
+                    "py_path": py_path,
+                    "nb_path": nb_path,
+                    "tokens": ctx.token_usage[_STAGE],
+                }
+            ),
         }
 
     except Exception as exc:  # noqa: BLE001
-        msg = f"[{_STAGE}] {exc}"
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.FAILED
-        log.exception("codegen_node.failed", run_id=run_id, error=str(exc))
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_FAILED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"error": str(exc)},
-            )
-        )
-        return {"stage_statuses": stage_statuses, "errors": errors, "code_output": None}
+        return {
+            "code_output": None,
+            **ctx.mark_failed(exc),
+        }

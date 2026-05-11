@@ -33,6 +33,7 @@ from src.models.output import (
 )
 from src.models.paper import PaperMetadata
 from src.models.run import StageStatus
+from src.graph.nodes._base import NodeContext
 from src.core.events import Event, EventType, default_bus
 
 _STAGE = "report"
@@ -347,47 +348,28 @@ async def report_node(state: PipelineState) -> dict[str, Any]:
     - ``stage_statuses["report"]``
     - ``errors`` — appended on failure
     """
-    run_id = state["run_id"]
-    paper_id: str | None = state.get("paper_id")
+    ctx = NodeContext(state, _STAGE)
+    ctx.mark_running()
+
     paper_metadata: PaperMetadata | None = state.get("paper_metadata")
-    extraction: AiMlExtraction | None = state.get("extraction")
+    raw_extraction = state.get("extraction")
+    extraction = (
+        AiMlExtraction.model_validate(raw_extraction) if raw_extraction else None
+    )
     summaries: list[SummaryOutput] = state.get("summaries", [])
     diagrams: list[DiagramOutput] = state.get("diagrams", [])
     code_output: CodeOutput | None = state.get("code_output")
-    errors: list[str] = list(state.get("errors", []))
-    stage_statuses: dict[str, StageStatus] = dict(state.get("stage_statuses", {}))
-
-    log.info("report_node.started", run_id=run_id, paper_id=paper_id)
-    stage_statuses[_STAGE] = StageStatus.RUNNING
-
-    cached_stages: set[str] = set(state.get("cached_stages", set()))
 
     # ── 0. Cache check ───────────────────────────────────────────────────────
-    from src.core.config import get_settings
-
-    settings = get_settings()
-
-    if settings.pipeline.cache_enabled and paper_id:
-        cached_path = await _load_cached_report(paper_id)
+    if ctx.settings.pipeline.cache_enabled and ctx.paper_id:
+        cached_path = await _load_cached_report(ctx.paper_id)
         if cached_path:
-            log.info("report_node.cache_hit", run_id=run_id)
-            stage_statuses[_STAGE] = StageStatus.CACHED
-            cached_stages.add(_STAGE)
-
-            default_bus.emit(
-                Event(
-                    type=EventType.STAGE_COMPLETED,
-                    run_id=run_id,
-                    stage_name=_STAGE,
-                    payload={"cached": True},
-                )
-            )
-            # When report hits cache, we can safely skip markdown generation
-            # and just return the report path.
+            # We explicitly want to emit STAGE_COMPLETED for cached too? NodeContext mark_cached does this.
+            # wait, does the original report_node cache hit emit RUN_COMPLETED?
+            # No! Original report_node cache hit emitted STAGE_COMPLETED and returned report_path.
             return {
                 "report_path": cached_path,
-                "stage_statuses": stage_statuses,
-                "cached_stages": cached_stages,
+                **ctx.mark_cached(),
             }
 
     try:
@@ -398,35 +380,36 @@ async def report_node(state: PipelineState) -> dict[str, Any]:
             summaries=summaries,
             diagrams=diagrams,
             code_output=code_output,
-            run_id=run_id,
+            run_id=ctx.run_id,
         )
 
         # ── 2. Upload to Supabase Storage ────────────────────────────────
-        storage_path = await _upload_report(paper_id or run_id, markdown)
+        storage_path = await _upload_report(ctx.paper_id or ctx.run_id, markdown)
 
         # ── 3. Persist ReportOutput to DB ────────────────────────────────
-        paper_uuid = uuid.UUID(paper_id) if paper_id else uuid.uuid4()
+        paper_uuid = uuid.UUID(ctx.paper_id) if ctx.paper_id else uuid.uuid4()
         report_output = ReportOutput(
             paper_id=paper_uuid,
             markdown_path=storage_path,
         )
 
-        if paper_id:
-            await _store_report_output(paper_id, report_output)
+        if ctx.paper_id:
+            await _store_report_output(ctx.paper_id, report_output)
 
         # ── 4. Emit RUN_COMPLETED ────────────────────────────────────────
-        stage_statuses[_STAGE] = StageStatus.COMPLETED
+        ret = ctx.mark_completed()
+
         default_bus.emit(
             Event(
                 type=EventType.RUN_COMPLETED,
-                run_id=run_id,
+                run_id=ctx.run_id,
                 stage_name=_STAGE,
                 payload={
                     "report_path": storage_path,
-                    "error_count": len(errors),
+                    "error_count": len(ret["errors"]),
                     "staged_completed": [
                         s
-                        for s, v in stage_statuses.items()
+                        for s, v in ret["stage_statuses"].items()
                         if v in (StageStatus.COMPLETED, StageStatus.CACHED)
                     ],
                 },
@@ -435,28 +418,24 @@ async def report_node(state: PipelineState) -> dict[str, Any]:
 
         log.info(
             "report_node.completed",
-            run_id=run_id,
+            run_id=ctx.run_id,
             report_path=storage_path,
             report_length=len(markdown),
         )
 
         return {
             "report_path": storage_path,
-            "stage_statuses": stage_statuses,
-            "errors": errors,
+            **ret,
         }
 
     except Exception as exc:  # noqa: BLE001
-        msg = f"[{_STAGE}] {exc}"
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.FAILED
-        log.exception("report_node.failed", run_id=run_id, error=str(exc))
+        ret = ctx.mark_failed(exc)
         default_bus.emit(
             Event(
                 type=EventType.RUN_FAILED,
-                run_id=run_id,
+                run_id=ctx.run_id,
                 stage_name=_STAGE,
                 payload={"error": str(exc)},
             )
         )
-        return {"stage_statuses": stage_statuses, "errors": errors}
+        return ret

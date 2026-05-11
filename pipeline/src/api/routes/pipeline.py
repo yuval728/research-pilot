@@ -133,33 +133,41 @@ async def stream_run_status(
     run_id: uuid.UUID,
     pipeline_service: PipelineServiceDep,
     _user: CurrentUserDep,
-):
+) -> StreamingResponse:
     async def event_generator():
         last_payload: dict | None = None
+        error_count = 0
+        max_errors = 10
+        base_delay = 1.0
         try:
             while True:
                 try:
                     run = await pipeline_service.get_run_status(run_id)
+                    error_count = 0  # Reset on success
                     payload = {
                         "id": str(run.id),
                         "status": run.status.value,
                         "stages": {
                             k: {"status": v.status.value} for k, v in run.stages.items()
                         },
-                        "updated_at": run.created_at.isoformat()
-                        if hasattr(run, "created_at")
-                        else None,
+                        "updated_at": run.created_at.isoformat(),
                     }
                     if payload != last_payload:
                         last_payload = payload
                         yield f"data: {json.dumps(payload)}\n\n"
                     if run.status.value in ("completed", "failed", "partial"):
                         break
-                except Exception:
-                    # On errors, continue polling; don't break the stream immediately
-                    pass
-                await asyncio.sleep(1)
+
+                    await asyncio.sleep(1)
+                except Exception as exc:
+                    error_count += 1
+                    if error_count >= max_errors:
+                        yield f"data: {json.dumps({'error': 'Stream failed after repeated errors', 'detail': str(exc)})}\n\n"
+                        break
+                    # Exponential backoff: 1s, 2s, 4s, 8s...
+                    delay = base_delay * (2 ** (error_count - 1))
+                    await asyncio.sleep(delay)
         finally:
-            return
+            pass
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

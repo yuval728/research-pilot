@@ -31,7 +31,7 @@ from src.core.config import get_settings
 from src.core.exceptions import (
     DuplicatePaperError,
     EmbeddingError,
-    FileNotFoundError,
+    StorageFileNotFoundError,
     FileUploadError,
     IngestionError,
     LLMError,
@@ -57,7 +57,7 @@ settings = get_settings()
 
 _STATUS_MAP: dict[type[ResearchPilotError], int] = {
     DuplicatePaperError: status.HTTP_409_CONFLICT,
-    FileNotFoundError: status.HTTP_404_NOT_FOUND,
+    StorageFileNotFoundError: status.HTTP_404_NOT_FOUND,
     FileUploadError: status.HTTP_502_BAD_GATEWAY,
     IngestionError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     LLMRateLimitError: status.HTTP_429_TOO_MANY_REQUESTS,

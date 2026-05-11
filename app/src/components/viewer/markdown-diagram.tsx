@@ -13,19 +13,19 @@ export function MarkdownDiagram({ code }: MarkdownDiagramProps) {
   useEffect(() => {
     mermaid.initialize({
       startOnLoad: false,
-      theme: 'dark',
+      theme: 'base',
       securityLevel: 'loose',
       fontFamily: 'Inter',
       themeVariables: {
-        darkMode: true,
-        background: '#050505',
-        primaryColor: '#1a1a1a',
-        primaryTextColor: '#fff',
-        primaryBorderColor: '#333',
-        lineColor: '#666',
-        secondaryColor: '#2a2a2a',
-        tertiaryColor: '#3a3a3a',
-      }
+        darkMode: false,
+        background: '#fcfcfb',
+        primaryColor: '#f7f5f2',
+        primaryTextColor: '#1f1f1f',
+        primaryBorderColor: '#ddd8d2',
+        lineColor: '#8a867f',
+        secondaryColor: '#f1efec',
+        tertiaryColor: '#f6f4f1',
+      },
     });
   }, []);
 
@@ -51,7 +51,7 @@ export function MarkdownDiagram({ code }: MarkdownDiagramProps) {
   }, [code]);
 
   return (
-    <Card className="bg-[#050505] border-[#1a1a1a] p-4 flex items-center justify-center my-4 overflow-auto hide-scrollbar">
+    <Card className="bg-gradient-to-br from-[#fcfcfb] via-[#f6f4f1] to-[#efeae4] text-[#1f1f1f] border border-[#e6e1da] shadow-[0_8px_22px_-18px_rgba(0,0,0,0.2)] p-4 flex items-center justify-center my-4 overflow-auto hide-scrollbar">
       {renderError ? (
         <p className="text-destructive text-sm font-mono">{renderError}</p>
       ) : svg ? (

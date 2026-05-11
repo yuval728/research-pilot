@@ -28,12 +28,11 @@ import hashlib
 import uuid
 from typing import Any
 
-from src.core.events import Event, EventType, default_bus
-from src.core.exceptions import DuplicatePaperError, PDFFetchError, StageError
+from src.core.exceptions import PDFFetchError, DuplicatePaperError, StageError
 from src.core.logger import get_logger
+from src.graph.nodes._base import NodeContext
 from src.graph.state import PipelineState
 from src.models.paper import PaperMetadata, PaperSource
-from src.models.run import StageStatus
 
 _STAGE = "ingest"
 _PAPERS_BUCKET = "papers"
@@ -219,17 +218,6 @@ async def _fetch_pdf_bytes(
         )
 
 
-def _emit_completed(run_id: str, paper_id: str, storage_path: str) -> None:
-    default_bus.emit(
-        Event(
-            type=EventType.STAGE_COMPLETED,
-            run_id=run_id,
-            stage_name=_STAGE,
-            payload={"paper_id": paper_id, "storage_path": storage_path},
-        )
-    )
-
-
 # ---------------------------------------------------------------------------
 # Node function
 # ---------------------------------------------------------------------------
@@ -240,27 +228,24 @@ async def ingest_node(state: PipelineState) -> dict[str, Any]:
 
     See module docstring for the three execution paths.
     """
-    run_id = state["run_id"]
-    existing_paper_id: str | None = state.get("paper_id")
+    ctx = NodeContext(state, _STAGE)
+    ctx.mark_running()
+
+    existing_paper_id = ctx.paper_id
     existing_storage_path: str | None = state.get("pdf_storage_path")
     metadata: PaperMetadata | None = state.get("paper_metadata")
     pdf_bytes: bytes | None = state.get("pdf_bytes")
-    errors: list[str] = list(state.get("errors", []))
-    stage_statuses: dict[str, StageStatus] = dict(state.get("stage_statuses", {}))
-
-    log.info("ingest_node.started", run_id=run_id, existing_paper_id=existing_paper_id)
-    stage_statuses[_STAGE] = StageStatus.RUNNING
 
     # ── PATH 1: Fully pre-ingested — both paper_id and storage_path are set ──
     if existing_paper_id and existing_storage_path:
         log.info(
             "ingest_node.skipped_already_ingested",
-            run_id=run_id,
+            run_id=ctx.run_id,
             paper_id=existing_paper_id,
         )
-        stage_statuses[_STAGE] = StageStatus.COMPLETED
-        _emit_completed(run_id, existing_paper_id, existing_storage_path)
-        return {"stage_statuses": stage_statuses, "errors": errors}
+        return ctx.mark_completed(
+            {"paper_id": existing_paper_id, "storage_path": existing_storage_path}
+        )
 
     try:
         # ── PATH 2: paper_id exists but PDF not yet fetched/uploaded ─────────
@@ -270,12 +255,12 @@ async def ingest_node(state: PipelineState) -> dict[str, Any]:
             paper_id = existing_paper_id
             log.info(
                 "ingest_node.fetching_pdf_for_existing_paper",
-                run_id=run_id,
+                run_id=ctx.run_id,
                 paper_id=paper_id,
             )
 
             if pdf_bytes is None:
-                pdf_bytes, _ = await _fetch_pdf_bytes(metadata, run_id)
+                pdf_bytes, _ = await _fetch_pdf_bytes(metadata, ctx.run_id)
 
             content_hash = _compute_sha256(pdf_bytes)
             storage_path = f"{paper_id}/paper.pdf"
@@ -284,17 +269,15 @@ async def ingest_node(state: PipelineState) -> dict[str, Any]:
                 await _upload_pdf(pdf_bytes, storage_path)
             except Exception as exc:  # noqa: BLE001
                 log.warning(
-                    "ingest_node.upload_skipped", reason=str(exc), run_id=run_id
+                    "ingest_node.upload_skipped", reason=str(exc), run_id=ctx.run_id
                 )
                 storage_path = f"local://{paper_id}/paper.pdf"
 
             await _update_paper_storage_path(paper_id, storage_path, content_hash)
 
-            stage_statuses[_STAGE] = StageStatus.COMPLETED
-            _emit_completed(run_id, paper_id, storage_path)
             log.info(
                 "ingest_node.completed",
-                run_id=run_id,
+                run_id=ctx.run_id,
                 paper_id=paper_id,
                 storage_path=storage_path,
             )
@@ -302,13 +285,14 @@ async def ingest_node(state: PipelineState) -> dict[str, Any]:
                 "paper_id": paper_id,
                 "pdf_bytes": pdf_bytes,
                 "pdf_storage_path": storage_path,
-                "stage_statuses": stage_statuses,
-                "errors": errors,
+                **ctx.mark_completed(
+                    {"paper_id": paper_id, "storage_path": storage_path}
+                ),
             }
 
         # ── PATH 3: Full ingestion from scratch ───────────────────────────────
         if pdf_bytes is None:
-            pdf_bytes, source = await _fetch_pdf_bytes(metadata, run_id)
+            pdf_bytes, source = await _fetch_pdf_bytes(metadata, ctx.run_id)
         else:
             source = PaperSource.PDF_UPLOAD.value
 
@@ -321,7 +305,9 @@ async def ingest_node(state: PipelineState) -> dict[str, Any]:
         try:
             await _upload_pdf(pdf_bytes, storage_path)
         except Exception as exc:  # noqa: BLE001
-            log.warning("ingest_node.upload_skipped", reason=str(exc), run_id=run_id)
+            log.warning(
+                "ingest_node.upload_skipped", reason=str(exc), run_id=ctx.run_id
+            )
             storage_path = f"local://{paper_id}/paper.pdf"
 
         try:
@@ -329,13 +315,13 @@ async def ingest_node(state: PipelineState) -> dict[str, Any]:
                 paper_id, source, storage_path, metadata, content_hash
             )
         except Exception as exc:  # noqa: BLE001
-            log.warning("ingest_node.db_write_skipped", reason=str(exc), run_id=run_id)
+            log.warning(
+                "ingest_node.db_write_skipped", reason=str(exc), run_id=ctx.run_id
+            )
 
-        stage_statuses[_STAGE] = StageStatus.COMPLETED
-        _emit_completed(run_id, paper_id, storage_path)
         log.info(
             "ingest_node.completed",
-            run_id=run_id,
+            run_id=ctx.run_id,
             paper_id=paper_id,
             storage_path=storage_path,
         )
@@ -344,37 +330,14 @@ async def ingest_node(state: PipelineState) -> dict[str, Any]:
             "paper_id": paper_id,
             "pdf_bytes": pdf_bytes,
             "pdf_storage_path": storage_path,
-            "stage_statuses": stage_statuses,
-            "errors": errors,
+            **ctx.mark_completed({"paper_id": paper_id, "storage_path": storage_path}),
         }
 
     except DuplicatePaperError as exc:
-        errors.append(f"[{_STAGE}] {exc.message}")
-        stage_statuses[_STAGE] = StageStatus.FAILED
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_FAILED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"error": exc.message},
-            )
-        )
-        return {"stage_statuses": stage_statuses, "errors": errors}
+        return ctx.mark_failed(exc)
 
     except StageError:
         raise
 
     except Exception as exc:  # noqa: BLE001
-        msg = f"[{_STAGE}] Unexpected error: {exc}"
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.FAILED
-        log.exception("ingest_node.failed", run_id=run_id, error=str(exc))
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_FAILED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"error": str(exc)},
-            )
-        )
-        return {"stage_statuses": stage_statuses, "errors": errors}
+        return ctx.mark_failed(exc)

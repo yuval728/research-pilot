@@ -9,6 +9,7 @@ from __future__ import annotations
 import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from src.core.config import get_settings
 from src.db.session import engine
@@ -72,7 +73,7 @@ async def health_detailed() -> DetailedHealthResponse:
     # --- Database ---
     try:
         async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+            await conn.execute(text("SELECT 1"))
         deps["database"] = DependencyStatus(healthy=True)
     except Exception as exc:  # noqa: BLE001
         deps["database"] = DependencyStatus(healthy=False, detail=str(exc))
@@ -100,7 +101,7 @@ async def health_detailed() -> DetailedHealthResponse:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
                 "https://generativelanguage.googleapis.com/v1beta/models",
-                params={"key": settings.gemini.api_key.get_secret_value()},
+                headers={"x-goog-api-key": settings.gemini.api_key.get_secret_value()},
             )
         deps["gemini_api"] = DependencyStatus(
             healthy=resp.status_code < 500,

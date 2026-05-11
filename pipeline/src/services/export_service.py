@@ -9,29 +9,20 @@ import uuid
 import anyio
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from supabase import Client, create_client  # type: ignore[import-untyped]
+from supabase import Client  # type: ignore[import-untyped]
 
 from src.core.config import get_settings
-from src.core.exceptions import FileNotFoundError, StorageError
+from src.core.exceptions import StorageFileNotFoundError, StorageError
+from src.db.engine import get_supabase_client
 from src.db.models import ExtractionORM, OutputORM
 from src.domains.ai_ml.schema import AiMlExtraction
 from src.models.output import (
     CodeOutput,
-    DiagramOutput,
     DiagramType,
     OutputBundle,
-    ReportOutput,
-    SummaryLevel,
-    SummaryOutput,
 )
 
 settings = get_settings()
-
-
-def _get_supabase() -> Client:
-    return create_client(
-        settings.supabase.url, settings.supabase.service_role_key.get_secret_value()
-    )
 
 
 class ExportService:
@@ -44,7 +35,7 @@ class ExportService:
     @property
     def supabase(self) -> Client:
         if not self._supabase:
-            self._supabase = _get_supabase()
+            self._supabase = get_supabase_client()
         return self._supabase
 
     async def _download_file(self, filepath: str) -> bytes:
@@ -60,7 +51,7 @@ class ExportService:
                 # The python supabase client raises generic Exceptions or StorageException
                 error_str = str(e).lower()
                 if "not found" in error_str or "object not found" in error_str:
-                    raise FileNotFoundError(
+                    raise StorageFileNotFoundError(
                         f"File {filepath} not found in outputs",
                         bucket=settings.supabase.outputs_bucket,
                         path=filepath,
@@ -122,55 +113,16 @@ class ExportService:
         )
         code_paths = {}
 
+        from src.services.converters import OutputDeserializer
+
         for orm in orms:
             t = orm.output_type
             if t.startswith("summary_"):
-                level_str = t.replace("summary_", "")
-                content = orm.storage_path
-                if content.startswith("inline:"):
-                    content = content[len("inline:") :]
-                    if content == f"summary_{level_str}":  # Backwards compatibility
-                        content = (
-                            "Summary content not available in DB (inline placeholder)"
-                        )
-                bundle.summaries.append(
-                    SummaryOutput(
-                        paper_id=paper_id,
-                        level=SummaryLevel(level_str),
-                        content=content,
-                    )
-                )
+                bundle.summaries.append(OutputDeserializer.parse_summary(orm))
             elif t.startswith("diagram_"):
-                level_str = t.replace("diagram_", "")
-                svg_path = orm.storage_path
-                dsl_code = "DSL Code Omitted"
-                if orm.storage_path.startswith("json:"):
-                    import json
-
-                    try:
-                        data = json.loads(orm.storage_path[5:])
-                        dsl_code = data.get("dsl_code", dsl_code)
-                        svg_path = data.get("svg_path")
-                    except Exception:
-                        pass
-                elif orm.storage_path.startswith("inline:"):
-                    dsl_code = orm.storage_path[len("inline:") :]
-                    svg_path = None
-                    if dsl_code == level_str:
-                        dsl_code = "DSL Code Omitted"
-
-                bundle.diagrams.append(
-                    DiagramOutput(
-                        paper_id=paper_id,
-                        diagram_type=DiagramType(level_str),
-                        dsl_code=dsl_code,
-                        svg_path=svg_path,
-                    )
-                )
+                bundle.diagrams.append(OutputDeserializer.parse_diagram(orm))
             elif t == "report":
-                bundle.report = ReportOutput(
-                    paper_id=paper_id, markdown_path=orm.storage_path
-                )
+                bundle.report = OutputDeserializer.parse_report(orm)
             elif t == "code_python":
                 code_paths["python"] = orm.storage_path
             elif t == "code_notebook":

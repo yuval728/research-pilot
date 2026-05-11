@@ -28,16 +28,13 @@ import instructor  # type: ignore[import-untyped]
 import litellm  # type: ignore[import-untyped]
 from sqlalchemy import text
 
-from jinja2 import Environment
-
-from src.core.config import get_settings
-from src.core.events import Event, EventType, default_bus
 from src.core.logger import get_logger
 from src.core.telemetry import TelemetryCollector, track_llm_call
+from src.graph.nodes._base import NodeContext, render_prompt
 from src.graph.state import PipelineState
+from src.core.config import AppSettings
 from src.domains.ai_ml.schema import AiMlExtraction
 from src.db.models import ExtractionORM
-from src.models.run import StageStatus
 
 _STAGE = "extract"
 _SCHEMA_VERSION = "1.0"
@@ -49,21 +46,6 @@ log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-async def _render_prompt(domain: str | None, sub_domain: str | None) -> str:
-    """Render the extract_v1.j2 template with domain context."""
-    import aiofiles  # type: ignore[import-untyped]
-
-    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
-        template_str = await f.read()
-
-    env = Environment(autoescape=False)
-    template = env.from_string(template_str)
-    return template.render(
-        domain=domain or "AI/ML",
-        sub_domain=sub_domain or "General",
-    )
 
 
 async def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
@@ -97,11 +79,11 @@ async def _call_gemini_extract(
     prompt: str,
     run_id: str,
     collector: TelemetryCollector,
+    settings: AppSettings,
 ) -> AiMlExtraction:
     """Call Gemini via LiteLLM + Instructor, returning a validated extraction."""
-    settings = get_settings()
     model = settings.gemini.vision_model
-
+    api_key = settings.gemini.api_key.get_secret_value()
     pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
     messages: list[dict[str, Any]] = [
@@ -130,6 +112,7 @@ async def _call_gemini_extract(
             temperature=settings.gemini.temperature,
             max_tokens=settings.gemini.max_output_tokens,
             max_retries=settings.gemini.max_retries,
+            api_key=api_key,
         )
         ctx.set_response(raw_response)
 
@@ -179,40 +162,21 @@ async def extract_node(state: PipelineState) -> dict[str, Any]:
     - ``cached_stages`` — if result was from cache
     - ``errors`` — appended on failure
     """
-    run_id = state["run_id"]
-    paper_id: str | None = state.get("paper_id")
+    ctx = NodeContext(state, _STAGE)
+    ctx.mark_running()
+
     pdf_bytes: bytes | None = state.get("pdf_bytes")
     domain: str | None = state.get("domain")
     sub_domain: str | None = state.get("sub_domain")
-    errors: list[str] = list(state.get("errors", []))
-    stage_statuses: dict[str, StageStatus] = dict(state.get("stage_statuses", {}))
-    token_usage: dict[str, int] = dict(state.get("token_usage", {}))
-    cached_stages: set[str] = set(state.get("cached_stages", set()))
-
-    log.info("extract_node.started", run_id=run_id, paper_id=paper_id)
-    stage_statuses[_STAGE] = StageStatus.RUNNING
 
     try:
         # ── 1. Cache check ───────────────────────────────────────────────
-        if paper_id:
-            cached = await _load_cached_extraction(paper_id)
+        if ctx.paper_id:
+            cached = await _load_cached_extraction(ctx.paper_id)
             if cached:
-                log.info("extract_node.cache_hit", run_id=run_id)
-                stage_statuses[_STAGE] = StageStatus.CACHED
-                cached_stages.add(_STAGE)
-                default_bus.emit(
-                    Event(
-                        type=EventType.STAGE_COMPLETED,
-                        run_id=run_id,
-                        stage_name=_STAGE,
-                        payload={"cached": True},
-                    )
-                )
                 return {
                     "extraction": cached,
-                    "stage_statuses": stage_statuses,
-                    "cached_stages": cached_stages,
-                    "errors": errors,
+                    **ctx.mark_cached(),
                 }
 
         # ── 2. Require PDF bytes ─────────────────────────────────────────
@@ -220,52 +184,38 @@ async def extract_node(state: PipelineState) -> dict[str, Any]:
             raise ValueError("extract_node requires pdf_bytes in state.")
 
         # ── 3. Render prompt and call Gemini + Instructor ────────────────
-        prompt = await _render_prompt(domain, sub_domain)
-        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
-        extraction = await _call_gemini_extract(pdf_bytes, prompt, run_id, collector)
-        token_usage[_STAGE] = collector.total_tokens
+        prompt = render_prompt(
+            _PROMPT_PATH, domain=domain or "AI/ML", sub_domain=sub_domain or "General"
+        )
+        collector = TelemetryCollector(run_id=ctx.run_id, paper_id=ctx.paper_id)
+        extraction = await _call_gemini_extract(
+            pdf_bytes,
+            prompt,
+            ctx.run_id,
+            collector,
+            settings=ctx.settings,
+        )
+        ctx.token_usage[_STAGE] = collector.total_tokens
 
         # ── 4. Persist to DB ─────────────────────────────────────────────
-        if paper_id:
-            await _store_extraction(paper_id, extraction, domain)
+        if ctx.paper_id:
+            await _store_extraction(ctx.paper_id, extraction, domain)
 
         # ── 5. Emit event ────────────────────────────────────────────────
-        stage_statuses[_STAGE] = StageStatus.COMPLETED
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_COMPLETED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"task": extraction.task, "tokens": token_usage[_STAGE]},
-            )
-        )
-
+        # ── 5. Emit event ────────────────────────────────────────────────
         log.info(
             "extract_node.completed",
-            run_id=run_id,
+            run_id=ctx.run_id,
             task=extraction.task,
-            tokens=token_usage[_STAGE],
+            tokens=ctx.token_usage[_STAGE],
         )
 
         return {
             "extraction": extraction,
-            "stage_statuses": stage_statuses,
-            "token_usage": token_usage,
-            "cached_stages": cached_stages,
-            "errors": errors,
+            **ctx.mark_completed(
+                {"task": extraction.task, "tokens": ctx.token_usage[_STAGE]}
+            ),
         }
 
     except Exception as exc:  # noqa: BLE001
-        msg = f"[{_STAGE}] {exc}"
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.FAILED
-        log.exception("extract_node.failed", run_id=run_id, error=str(exc))
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_FAILED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"error": str(exc)},
-            )
-        )
-        return {"stage_statuses": stage_statuses, "errors": errors}
+        return ctx.mark_failed(exc)

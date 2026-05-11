@@ -1,7 +1,7 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @custom-variant dark (&:is(.dark *));
 
@@ -114,6 +114,31 @@
 .prose code { background: #1a1a1a; padding: 0.2em 0.4em; border-radius: 0.25em; font-family: var(--font-mono); font-size: 0.9em; }
 .prose pre blockquote { border: none; }
 .prose pre { background: #1a1a1a; padding: 1em; border-radius: 0.5em; overflow-x: auto; margin-bottom: 1em; }
+.prose details {
+  background: #101010;
+  border: 1px solid #2a2a2a;
+  border-radius: 0.5em;
+  padding: 0.75em 1em;
+  margin: 1em 0;
+}
+.prose summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #e5e5e5;
+  list-style: none;
+}
+.prose summary::-webkit-details-marker {
+  display: none;
+}
+.prose summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.5em;
+  color: #9ca3af;
+}
+.prose details[open] summary::before {
+  content: '▾';
+}
 .prose th, .prose td {
   border: 1px solid #333;
   padding: 0.5em 1em;

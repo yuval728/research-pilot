@@ -12,7 +12,7 @@ Responsibilities
    - proposed method
    - headline results
 3. Calls ``litellm.embedding()`` with ``gemini/text-embedding-004`` per chunk.
-4. Stores 768-d vectors in the ``embeddings`` table via pgvector.
+4. Stores 1536-d vectors in the ``embeddings`` table via pgvector.
 5. Updates state with confirmation.
 6. Emits ``STAGE_COMPLETED`` event.
 
@@ -25,10 +25,9 @@ import uuid
 from typing import Any
 
 from src.core.logger import get_logger
+from src.graph.nodes._base import NodeContext
 from src.graph.state import PipelineState
 from src.domains.ai_ml.schema import AiMlExtraction
-from src.models.run import StageStatus
-from src.core.events import Event, EventType, default_bus
 
 _STAGE = "embed"
 
@@ -47,29 +46,37 @@ def _build_chunks(
 
     Returns
     -------
-    list of (chunk_type, text) tuples, skipping empty chunks.
+    list of (chunk_type, text) tuples, skipping empty or redundant chunks.
     """
-    chunks: list[tuple[str, str]] = []
+    raw_chunks: list[tuple[str, str]] = []
 
     # Chunk 1: title + abstract / problem statement
     title_abstract = " ".join(filter(None, [paper_title, extraction.problem_statement]))
     if title_abstract.strip():
-        chunks.append(("title_abstract", title_abstract.strip()))
+        raw_chunks.append(("title_abstract", title_abstract.strip()))
 
     # Chunk 2: key contributions
     if extraction.key_contributions:
         contributions_text = "\n".join(f"- {c}" for c in extraction.key_contributions)
-        chunks.append(("key_contributions", contributions_text))
+        raw_chunks.append(("key_contributions", contributions_text))
 
     # Chunk 3: proposed method
     if extraction.proposed_method_summary:
-        chunks.append(("proposed_method", extraction.proposed_method_summary))
+        raw_chunks.append(("proposed_method", extraction.proposed_method_summary))
 
     # Chunk 4: results
     if extraction.main_results:
-        chunks.append(("main_results", extraction.main_results))
+        raw_chunks.append(("main_results", extraction.main_results))
 
-    return chunks
+    # Deduplicate based on text to save tokens/costs
+    seen_texts: set[str] = set()
+    final_chunks: list[tuple[str, str]] = []
+    for ctype, text in raw_chunks:
+        if text not in seen_texts:
+            seen_texts.add(text)
+            final_chunks.append((ctype, text))
+
+    return final_chunks
 
 
 async def _embed_chunks(
@@ -162,57 +169,31 @@ async def embed_node(state: PipelineState) -> dict[str, Any]:
     - ``token_usage["embed"]``  (approximated from chunk count)
     - ``errors`` — appended on failure
     """
-    run_id = state["run_id"]
-    paper_id: str | None = state.get("paper_id")
-    extraction: AiMlExtraction | None = state.get("extraction")
+    ctx = NodeContext(state, _STAGE)
+    ctx.mark_running()
+
+    raw_extraction = state.get("extraction")
+    extraction = (
+        AiMlExtraction.model_validate(raw_extraction) if raw_extraction else None
+    )
     paper_metadata = state.get("paper_metadata")
-    errors: list[str] = list(state.get("errors", []))
-    stage_statuses: dict[str, StageStatus] = dict(state.get("stage_statuses", {}))
-    token_usage: dict[str, int] = dict(state.get("token_usage", {}))
-
-    log.info("embed_node.started", run_id=run_id)
-    stage_statuses[_STAGE] = StageStatus.RUNNING
-
-    cached_stages: set[str] = set(state.get("cached_stages", set()))
 
     # ── 1. Cache check ───────────────────────────────────────────────────────
-    from src.core.config import get_settings
-
-    settings = get_settings()
-
-    if settings.pipeline.cache_enabled and paper_id:
-        is_cached = await _load_cached_embeddings(paper_id)
+    if ctx.settings.pipeline.cache_enabled and ctx.paper_id:
+        is_cached = await _load_cached_embeddings(ctx.paper_id)
         if is_cached:
-            log.info("embed_node.cache_hit", run_id=run_id)
-            stage_statuses[_STAGE] = StageStatus.CACHED
-            cached_stages.add(_STAGE)
-
-            default_bus.emit(
-                Event(
-                    type=EventType.STAGE_COMPLETED,
-                    run_id=run_id,
-                    stage_name=_STAGE,
-                    payload={"cached": True},
-                )
-            )
             return {
-                "stage_statuses": stage_statuses,
-                "cached_stages": cached_stages,
+                **ctx.mark_cached(),
             }
 
     if extraction is None:
-        msg = f"[{_STAGE}] extraction is None — skipping."
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.SKIPPED
-        log.warning("embed_node.skipped", run_id=run_id, reason="no extraction")
-        return {"stage_statuses": stage_statuses, "errors": errors}
+        return {
+            **ctx.mark_skipped("extraction is None — skipping."),
+        }
 
     try:
-        from src.core.config import get_settings
-
-        settings = get_settings()
-        model = settings.gemini.embedding_model
-        api_key = settings.gemini.api_key.get_secret_value()
+        model = ctx.settings.gemini.embedding_model
+        api_key = ctx.settings.gemini.api_key.get_secret_value()
 
         paper_title: str | None = None
         if paper_metadata:
@@ -222,57 +203,31 @@ async def embed_node(state: PipelineState) -> dict[str, Any]:
         chunks = _build_chunks(extraction, paper_title)
 
         if not chunks:
-            log.warning("embed_node.no_chunks", run_id=run_id)
-            stage_statuses[_STAGE] = StageStatus.COMPLETED
-            return {"stage_statuses": stage_statuses, "errors": errors}
+            return ctx.mark_completed()
 
         # ── 2. Embed each chunk ──────────────────────────────────────────
         embedded_chunks = await _embed_chunks(chunks, model, api_key)
 
         # Approximate token usage: ~1 token per 4 chars
         approx_tokens = sum(len(t) // 4 for _, t in chunks)
-        token_usage[_STAGE] = approx_tokens
+        ctx.token_usage[_STAGE] = approx_tokens
 
         # ── 3. Store to DB ───────────────────────────────────────────────
-        if paper_id:
-            await _store_embeddings(paper_id, embedded_chunks)
-
-        stage_statuses[_STAGE] = StageStatus.COMPLETED
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_COMPLETED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={
-                    "chunk_count": len(embedded_chunks),
-                    "dims": len(embedded_chunks[0][1]) if embedded_chunks else 0,
-                },
-            )
-        )
+        if ctx.paper_id:
+            await _store_embeddings(ctx.paper_id, embedded_chunks)
 
         log.info(
             "embed_node.completed",
-            run_id=run_id,
+            run_id=ctx.run_id,
             chunk_count=len(embedded_chunks),
         )
 
-        return {
-            "stage_statuses": stage_statuses,
-            "token_usage": token_usage,
-            "errors": errors,
-        }
+        return ctx.mark_completed(
+            {
+                "chunk_count": len(embedded_chunks),
+                "dims": len(embedded_chunks[0][1]) if embedded_chunks else 0,
+            }
+        )
 
     except Exception as exc:  # noqa: BLE001
-        msg = f"[{_STAGE}] {exc}"
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.FAILED
-        log.exception("embed_node.failed", run_id=run_id, error=str(exc))
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_FAILED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"error": str(exc)},
-            )
-        )
-        return {"stage_statuses": stage_statuses, "errors": errors}
+        return ctx.mark_failed(exc)

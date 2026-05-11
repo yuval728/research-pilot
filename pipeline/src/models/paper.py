@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 from src.models.run import PipelineRun
 
 
@@ -98,12 +98,6 @@ class Paper(BaseModel):
         description="UTC timestamp of the last update.",
     )
 
-    @field_validator("source_url", mode="before")
-    @classmethod
-    def require_url_for_non_upload(cls, v: object) -> object:
-        """Passthrough — cross-field logic lives in PaperCreate."""
-        return v
-
 
 class PaperListItem(BaseModel):
     """Paper payload enriched with the latest pipeline run."""
@@ -144,11 +138,6 @@ class PaperCreate(BaseModel):
         None,
         description="Optional title hint to speed up metadata extraction.",
     )
-
-    @field_validator("source_url", mode="before")
-    @classmethod
-    def coerce_url(cls, v: object) -> object:
-        return v
 
     def model_post_init(self, __context: object) -> None:  # noqa: D102
         if self.source == PaperSource.PDF_UPLOAD:

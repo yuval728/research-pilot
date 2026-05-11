@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import functools
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import Literal
 
 import yaml
 from pydantic import Field, SecretStr
@@ -203,9 +203,7 @@ def _build_settings(yaml_path: Path | None = None) -> AppSettings:
     # Flatten YAML overrides into env-var format so pydantic-settings picks
     # them up with lower priority than real env vars.
     # We do this by constructing nested objects explicitly.
-    TBaseSettings = TypeVar("TBaseSettings", bound=BaseSettings)
-
-    def _section(cls: type[TBaseSettings], key: str) -> TBaseSettings:
+    def _section(cls: type[BaseSettings], key: str) -> BaseSettings:
         section_data = overrides.get(key, {})
         return cls(**section_data)
 

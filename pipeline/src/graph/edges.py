@@ -96,13 +96,29 @@ def should_continue_after_classify(
     # Confidence gate
     confidence: float = state.get("classification_confidence", 0.0)
     if confidence < CLASSIFICATION_CONFIDENCE_THRESHOLD:
-        errors: list[str] = list(state.get("errors", []))
-        errors.append(
-            f"[routing] Classification confidence {confidence:.2f} is below "
+        # Edge functions return only a string — they cannot mutate state.
+        # Emit an event so the message is surfaced via SSE / telemetry.
+        from src.core.events import Event, EventType, default_bus
+        from src.core.logger import get_logger
+
+        log = get_logger(__name__)
+        msg = (
+            f"Classification confidence {confidence:.2f} is below "
             f"threshold {CLASSIFICATION_CONFIDENCE_THRESHOLD}. Halting pipeline."
         )
-        # We can't mutate state here; the error is surfaced via the log.
-        # The caller (pipeline.py) reads errors from state after __end__.
+        log.warning(
+            "routing.low_confidence",
+            confidence=confidence,
+            threshold=CLASSIFICATION_CONFIDENCE_THRESHOLD,
+        )
+        default_bus.emit(
+            Event(
+                type=EventType.STAGE_FAILED,
+                run_id=state.get("run_id", ""),
+                stage_name="classify",
+                payload={"error": msg},
+            )
+        )
         return "__end__"
 
     return "extract"

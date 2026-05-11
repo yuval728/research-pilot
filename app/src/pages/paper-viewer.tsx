@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,7 @@ import { DiagramViewer } from '@/components/viewer/diagram-viewer';
 import { ExtractionTree } from '@/components/viewer/extraction-tree';
 import { SummaryTabs } from '@/components/viewer/summary-tabs';
 import { MarkdownDiagram } from '@/components/viewer/markdown-diagram';
+import { supabase } from '@/lib/supabase';
 import { papersApi } from '@/lib/api/papers';
 import { pipelineApi } from '@/lib/api/pipeline';
 import { usePipelineSSE } from '@/lib/hooks/use-pipeline-sse';
@@ -53,8 +55,6 @@ const initialLoadPromises = new Map<
   string,
   Promise<{ paper: Paper; bundle: OutputBundle; latestRun: PipelineRun | null }>
 >();
-
-import { supabase } from '@/lib/supabase';
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -378,25 +378,34 @@ export default function PaperViewerPage() {
                     <div className="prose prose-invert max-w-none markdown-body">
                       <Markdown
                         remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeRaw]}
                         components={{
                           img: ({ node, ...props }) => {
-                            if (props.src && !props.src.startsWith('http') && !props.src.startsWith('data:')) {
-                              const { data } = supabase.storage.from('outputs').getPublicUrl(props.src);
+                            if (
+                              props.src &&
+                              !props.src.startsWith('http') &&
+                              !props.src.startsWith('data:')
+                            ) {
+                              const { data } = supabase.storage
+                                .from('outputs')
+                                .getPublicUrl(props.src);
                               return <img {...props} src={data.publicUrl} />;
                             }
-                           ,
+                            return <img {...props} />;
+                          },
                           code: ({ node, inline, className, children, ...props }: any) => {
                             const match = /language-(\w+)/.exec(className || '');
                             if (!inline && match && match[1] === 'mermaid') {
-                              return <MarkdownDiagram code={String(children).replace(/\n$/, '')} />;
+                              return (
+                                <MarkdownDiagram code={String(children).replace(/\n$/, '')} />
+                              );
                             }
                             return (
                               <code className={className} {...props}>
                                 {children}
                               </code>
                             );
-                          } return <img {...props} />;
-                          }
+                          },
                         }}
                       >
                         {reportMarkdown}

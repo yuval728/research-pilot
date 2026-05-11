@@ -331,7 +331,7 @@ class FileUploadError(StorageError):
         self.cause = cause
 
 
-class FileNotFoundError(StorageError):  # noqa: A001 — intentional shadow
+class StorageFileNotFoundError(StorageError):  # noqa: A001 — intentional shadow
     """A requested file does not exist in Supabase Storage.
 
     Parameters

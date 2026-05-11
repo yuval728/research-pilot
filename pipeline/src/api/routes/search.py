@@ -64,9 +64,12 @@ async def search_papers(
     try:
         return await paper_service.search_papers(body.query, limit=body.limit)
     except Exception as exc:  # noqa: BLE001
+        import structlog
+
+        structlog.get_logger(__name__).exception("search_failed", error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {exc}",
+            detail="Search failed due to an internal error.",
         ) from exc
 
 
@@ -113,9 +116,14 @@ async def similar_papers(
     try:
         candidates = await paper_service.search_papers(query, limit=limit + 1)
     except Exception as exc:  # noqa: BLE001
+        import structlog
+
+        structlog.get_logger(__name__).exception(
+            "similarity_search_failed", error=str(exc)
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Similarity search failed: {exc}",
+            detail="Similarity search failed due to an internal error.",
         ) from exc
 
     # Exclude the source paper itself from results

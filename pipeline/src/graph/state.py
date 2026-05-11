@@ -19,7 +19,7 @@ from typing import Any
 
 from typing_extensions import NotRequired, TypedDict
 
-from src.domains.ai_ml.schema import AiMlExtraction
+from pydantic import BaseModel
 from src.models.output import CodeOutput, DiagramOutput, SummaryOutput
 from src.models.paper import PaperMetadata
 from src.models.run import StageStatus
@@ -75,7 +75,7 @@ class PipelineState(TypedDict):
     domain: NotRequired[str | None]
     sub_domain: NotRequired[str | None]
     classification_confidence: NotRequired[float]
-    extraction: NotRequired[AiMlExtraction | None]
+    extraction: NotRequired[BaseModel | None]
     summaries: NotRequired[list[SummaryOutput]]
     diagrams: NotRequired[list[DiagramOutput]]
     code_output: NotRequired[CodeOutput | None]

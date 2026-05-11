@@ -6,32 +6,26 @@ Paper ingestion and retrieval flow.
 
 import re
 import uuid
-import uuid as uuid_pkg
 from datetime import datetime, timezone
 
 import anyio
 import arxiv  # type: ignore[import-untyped]
 import httpx
 from litellm import aembedding
-from sqlalchemy import desc, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from supabase import Client, create_client
+from supabase import Client
 
 from src.core.config import get_settings
 from src.core.exceptions import FileUploadError
+from src.db.engine import get_supabase_client
 from src.db.models import EmbeddingORM, PaperORM
 from src.db.models import PipelineRunORM
 from src.models.paper import Paper, PaperListItem, PaperMetadata, PaperSource
-from src.models.run import PipelineRun, RunStatus, StageResult, StageStatus
+from src.models.run import PipelineRun, StageResult
 
 settings = get_settings()
-
-
-def _get_supabase() -> Client:
-    return create_client(
-        settings.supabase.url, settings.supabase.service_role_key.get_secret_value()
-    )
 
 
 class PaperService:
@@ -45,7 +39,7 @@ class PaperService:
     @property
     def supabase(self) -> Client:
         if not self._supabase:
-            self._supabase = _get_supabase()
+            self._supabase = get_supabase_client()
         return self._supabase
 
     def _to_pydantic(self, orm: PaperORM) -> Paper:
@@ -61,40 +55,14 @@ class PaperService:
         )
 
     def _to_stage_pydantic(self, orm) -> StageResult:
-        return StageResult(
-            stage_name=orm.stage_name,
-            status=StageStatus(orm.status),
-            started_at=orm.started_at.replace(tzinfo=timezone.utc)
-            if orm.started_at
-            else None,
-            completed_at=orm.completed_at.replace(tzinfo=timezone.utc)
-            if orm.completed_at
-            else None,
-            error_message=orm.error_message,
-            cached=orm.cached,
-            token_count=orm.token_count,
-        )
+        from src.services.converters import stage_orm_to_pydantic
+
+        return stage_orm_to_pydantic(orm)
 
     def _to_run_pydantic(self, orm: PipelineRunORM) -> PipelineRun:
-        run = PipelineRun(
-            id=orm.id,
-            paper_id=orm.paper_id,
-            status=RunStatus(orm.status),
-            started_at=orm.started_at.replace(tzinfo=timezone.utc)
-            if orm.started_at
-            else None,
-            completed_at=orm.completed_at.replace(tzinfo=timezone.utc)
-            if orm.completed_at
-            else None,
-            total_tokens=orm.total_tokens,
-            error=orm.error,
-            created_at=orm.created_at.replace(tzinfo=timezone.utc),
-            stages={},
-        )
-        if orm.stages:
-            for stage in orm.stages:
-                run.stages[stage.stage_name] = self._to_stage_pydantic(stage)
-        return run
+        from src.services.converters import run_orm_to_pydantic
+
+        return run_orm_to_pydantic(orm)
 
     async def _ingest(
         self,
@@ -104,7 +72,7 @@ class PaperService:
         metadata: PaperMetadata | None = None,
     ) -> Paper:
         """Core ingest logic: creates the DB record."""
-        paper_id = uuid_pkg.uuid4()
+        paper_id = uuid.uuid4()
         orm = PaperORM(
             id=paper_id,
             source=source.value,
@@ -126,7 +94,7 @@ class PaperService:
         if not file_bytes:
             raise ValueError("File cannot be empty")
 
-        file_id = uuid_pkg.uuid4()
+        file_id = uuid.uuid4()
         storage_path = f"{file_id}_{filename}"
 
         def _upload() -> None:
@@ -248,7 +216,9 @@ class PaperService:
         self, filters: dict[str, str] | None = None
     ) -> list[PaperListItem]:
         """List papers with optional filters and attach latest run."""
-        stmt = select(PaperORM)
+        stmt = select(PaperORM).options(
+            selectinload(PaperORM.runs).selectinload(PipelineRunORM.stages)
+        )
         # Note: simplistic filter example string
         if filters:
             if "source" in filters:
@@ -257,29 +227,21 @@ class PaperService:
 
         result = await self.db.execute(stmt)
         orms = result.scalars().all()
-        papers = [self._to_pydantic(orm) for orm in orms]
-        if not papers:
-            return []
 
-        paper_ids = [p.id for p in papers]
-        latest_runs_stmt = (
-            select(PipelineRunORM)
-            .where(PipelineRunORM.paper_id.in_(paper_ids))
-            .options(selectinload(PipelineRunORM.stages))
-            .order_by(PipelineRunORM.paper_id, desc(PipelineRunORM.created_at))
-        )
-        latest_runs_result = await self.db.execute(latest_runs_stmt)
-        latest_runs = latest_runs_result.scalars().all()
+        items = []
+        for orm in orms:
+            paper = self._to_pydantic(orm)
+            latest_run_orm = None
+            if getattr(orm, "runs", None):
+                sorted_runs = sorted(orm.runs, key=lambda r: r.created_at, reverse=True)
+                latest_run_orm = sorted_runs[0] if sorted_runs else None
 
-        latest_run_map: dict[uuid.UUID, PipelineRun] = {}
-        for run_orm in latest_runs:
-            if run_orm.paper_id not in latest_run_map:
-                latest_run_map[run_orm.paper_id] = self._to_run_pydantic(run_orm)
+            latest_run = (
+                self._to_run_pydantic(latest_run_orm) if latest_run_orm else None
+            )
+            items.append(PaperListItem(paper=paper, latest_run=latest_run))
 
-        return [
-            PaperListItem(paper=paper, latest_run=latest_run_map.get(paper.id))
-            for paper in papers
-        ]
+        return items
 
     async def search_papers(self, query: str, limit: int = 5) -> list[Paper]:
         """Queries pgvector similarity search using LiteLLM."""
@@ -288,8 +250,6 @@ class PaperService:
             input=[query],
         )
         query_vec = res.data[0]["embedding"]
-        if hasattr(res.data[0], "embedding"):
-            query_vec = res.data[0].embedding  # litellm standardizes based on backend
 
         stmt = (
             select(PaperORM)

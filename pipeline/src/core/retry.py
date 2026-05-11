@@ -33,7 +33,6 @@ Usage
 
 from __future__ import annotations
 
-import functools
 from typing import Any, Callable, TypeVar
 
 from tenacity import (
@@ -81,21 +80,6 @@ def _log_retry(retry_state: RetryCallState) -> None:
     )
 
 
-def _log_final_failure(retry_state: RetryCallState) -> None:
-    """Called when all retries are exhausted."""
-    from src.core.logger import get_logger
-
-    log = get_logger(__name__)
-
-    exc = retry_state.outcome.exception() if retry_state.outcome else None
-    log.error(
-        "retry_exhausted",
-        attempts=retry_state.attempt_number,
-        error_type=type(exc).__name__ if exc else "unknown",
-        error=str(exc) if exc else "",
-    )
-
-
 # ---------------------------------------------------------------------------
 # @llm_retry
 # ---------------------------------------------------------------------------
@@ -109,19 +93,13 @@ def llm_retry(fn: _F) -> _F:
     - Retries on: LLMRateLimitError, LLMTimeoutError
     - Logs each retry attempt via structlog
     """
-    decorated = retry(
+    return retry(
         retry=retry_if_exception_type((LLMRateLimitError, LLMTimeoutError)),
         stop=stop_after_attempt(_MAX_ATTEMPTS),
         wait=wait_random_exponential(min=_MIN_WAIT, max=_MAX_WAIT),
         after=_log_retry,
         reraise=True,
-    )(fn)
-
-    @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return decorated(*args, **kwargs)
-
-    return wrapper  # type: ignore[return-value]
+    )(fn)  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -147,19 +125,13 @@ def http_retry(fn: _F) -> _F:
     Callers must raise ``_HttpError(status_code)`` themselves if they want
     status-code-based retries, or use the ``check_http_status`` helper below.
     """
-    decorated = retry(
+    return retry(
         retry=retry_if_exception_type((OSError, _HttpError)),
         stop=stop_after_attempt(_MAX_ATTEMPTS),
         wait=wait_exponential_jitter(initial=1, max=30, jitter=2),
         after=_log_retry,
         reraise=True,
-    )(fn)
-
-    @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return decorated(*args, **kwargs)
-
-    return wrapper  # type: ignore[return-value]
+    )(fn)  # type: ignore[return-value]
 
 
 def check_http_status(status_code: int) -> None:
@@ -203,16 +175,10 @@ def with_validation_retry(fn: _F) -> _F:
     except ImportError as e:  # pragma: no cover
         raise ImportError("pydantic is required for with_validation_retry") from e
 
-    decorated = retry(
+    return retry(
         retry=retry_if_exception_type(PydanticValidationError),
         stop=stop_after_attempt(_MAX_ATTEMPTS),
         wait=wait_exponential_jitter(initial=0.5, max=5, jitter=0.5),
         after=_log_retry,
         reraise=True,
-    )(fn)
-
-    @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return decorated(*args, **kwargs)
-
-    return wrapper  # type: ignore[return-value]
+    )(fn)  # type: ignore[return-value]

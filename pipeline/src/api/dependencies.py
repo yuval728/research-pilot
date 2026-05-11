@@ -9,7 +9,6 @@ route handlers.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from functools import lru_cache
 from typing import Annotated
 
@@ -19,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import get_settings
 from src.core.logger import get_logger
-from src.db.session import SessionLocal
+from src.db.session import get_db
 from src.services import ExportService, PaperService, PipelineService
 
 settings = get_settings()
@@ -30,15 +29,6 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _bearer = HTTPBearer(auto_error=False)
-
-
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Yield a SQLAlchemy async session per request, closed on teardown."""
-    async with SessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
 
 
 DbDep = Annotated[AsyncSession, Depends(get_db)]

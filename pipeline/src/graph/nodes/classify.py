@@ -26,12 +26,11 @@ import litellm  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
 from src.core.config import get_settings
-from src.core.events import Event, EventType, default_bus
 from src.core.logger import get_logger
 from src.core.telemetry import TelemetryCollector, track_llm_call
 from src.core.utils import extract_json
+from src.graph.nodes._base import NodeContext, render_prompt
 from src.graph.state import PipelineState
-from src.models.run import StageStatus
 
 _STAGE = "classify"
 _PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "classify_v1.j2"
@@ -56,14 +55,6 @@ class ClassificationResult(BaseModel):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-async def _load_prompt() -> str:
-    """Load the Jinja2 template as a plain string (no variables needed)."""
-    import aiofiles  # type: ignore[import-untyped]
-
-    async with aiofiles.open(_PROMPT_PATH, mode="r", encoding="utf-8") as f:
-        return await f.read()
 
 
 async def _fetch_pdf_bytes(storage_path: str) -> bytes:
@@ -231,41 +222,22 @@ async def classify_node(state: PipelineState) -> dict[str, Any]:
     - ``cached_stages`` — if result was from cache
     - ``errors`` — appended on failure
     """
-    run_id = state["run_id"]
-    paper_id: str | None = state.get("paper_id")
+    ctx = NodeContext(state, _STAGE)
+    ctx.mark_running()
+
     pdf_bytes: bytes | None = state.get("pdf_bytes")
     storage_path: str | None = state.get("pdf_storage_path")
-    errors: list[str] = list(state.get("errors", []))
-    stage_statuses: dict[str, StageStatus] = dict(state.get("stage_statuses", {}))
-    token_usage: dict[str, int] = dict(state.get("token_usage", {}))
-    cached_stages: set[str] = set(state.get("cached_stages", set()))
-
-    log.info("classify_node.started", run_id=run_id, paper_id=paper_id)
-    stage_statuses[_STAGE] = StageStatus.RUNNING
 
     try:
         # ── 1. Cache check ───────────────────────────────────────────────
-        if paper_id:
-            cached = await _load_cached_classification(paper_id)
+        if ctx.paper_id:
+            cached = await _load_cached_classification(ctx.paper_id)
             if cached:
-                log.info("classify_node.cache_hit", run_id=run_id)
-                stage_statuses[_STAGE] = StageStatus.CACHED
-                cached_stages.add(_STAGE)
-                default_bus.emit(
-                    Event(
-                        type=EventType.STAGE_COMPLETED,
-                        run_id=run_id,
-                        stage_name=_STAGE,
-                        payload={"cached": True, "domain": cached.domain},
-                    )
-                )
                 return {
                     "domain": cached.domain,
                     "sub_domain": cached.sub_domain,
                     "classification_confidence": cached.confidence,
-                    "stage_statuses": stage_statuses,
-                    "cached_stages": cached_stages,
-                    "errors": errors,
+                    **ctx.mark_cached({"domain": cached.domain}),
                 }
 
         # ── 2. Ensure we have PDF bytes ──────────────────────────────────
@@ -278,34 +250,20 @@ async def classify_node(state: PipelineState) -> dict[str, Any]:
                 )
 
         # ── 3. Load prompt and call Gemini ───────────────────────────────
-        prompt = await _load_prompt()
-        collector = TelemetryCollector(run_id=run_id, paper_id=paper_id)
-        result = await _call_gemini_classify(pdf_bytes, prompt, run_id, collector)
+        prompt = render_prompt(_PROMPT_PATH)
+        collector = TelemetryCollector(run_id=ctx.run_id, paper_id=ctx.paper_id)
+        result = await _call_gemini_classify(pdf_bytes, prompt, ctx.run_id, collector)
 
-        token_usage[_STAGE] = collector.total_tokens
+        ctx.token_usage[_STAGE] = collector.total_tokens
 
         # ── 4. Persist classification to DB (enables future cache hits) ──
-        if paper_id:
-            await _persist_classification(paper_id, result)
+        if ctx.paper_id:
+            await _persist_classification(ctx.paper_id, result)
 
         # ── 5. Emit event and return ─────────────────────────────────────
-        stage_statuses[_STAGE] = StageStatus.COMPLETED
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_COMPLETED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={
-                    "domain": result.domain,
-                    "sub_domain": result.sub_domain,
-                    "confidence": result.confidence,
-                },
-            )
-        )
-
         log.info(
             "classify_node.completed",
-            run_id=run_id,
+            run_id=ctx.run_id,
             domain=result.domain,
             sub_domain=result.sub_domain,
             confidence=result.confidence,
@@ -316,23 +274,14 @@ async def classify_node(state: PipelineState) -> dict[str, Any]:
             "domain": result.domain,
             "sub_domain": result.sub_domain,
             "classification_confidence": result.confidence,
-            "stage_statuses": stage_statuses,
-            "token_usage": token_usage,
-            "cached_stages": cached_stages,
-            "errors": errors,
+            **ctx.mark_completed(
+                {
+                    "domain": result.domain,
+                    "sub_domain": result.sub_domain,
+                    "confidence": result.confidence,
+                }
+            ),
         }
 
     except Exception as exc:  # noqa: BLE001
-        msg = f"[{_STAGE}] {exc}"
-        errors.append(msg)
-        stage_statuses[_STAGE] = StageStatus.FAILED
-        log.exception("classify_node.failed", run_id=run_id, error=str(exc))
-        default_bus.emit(
-            Event(
-                type=EventType.STAGE_FAILED,
-                run_id=run_id,
-                stage_name=_STAGE,
-                payload={"error": str(exc)},
-            )
-        )
-        return {"stage_statuses": stage_statuses, "errors": errors}
+        return ctx.mark_failed(exc)
