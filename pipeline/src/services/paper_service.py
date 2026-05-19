@@ -24,6 +24,7 @@ from src.db.models import EmbeddingORM, PaperORM
 from src.db.models import PipelineRunORM
 from src.models.paper import Paper, PaperListItem, PaperMetadata, PaperSource
 from src.models.run import PipelineRun, StageResult
+from src.services.converters import run_orm_to_pydantic, stage_orm_to_pydantic
 
 settings = get_settings()
 
@@ -55,13 +56,9 @@ class PaperService:
         )
 
     def _to_stage_pydantic(self, orm) -> StageResult:
-        from src.services.converters import stage_orm_to_pydantic
-
         return stage_orm_to_pydantic(orm)
 
     def _to_run_pydantic(self, orm: PipelineRunORM) -> PipelineRun:
-        from src.services.converters import run_orm_to_pydantic
-
         return run_orm_to_pydantic(orm)
 
     async def _ingest(

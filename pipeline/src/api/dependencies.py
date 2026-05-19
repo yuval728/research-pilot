@@ -15,11 +15,14 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
+from supabase import create_client
 
 from src.core.config import get_settings
 from src.core.logger import get_logger
 from src.db.session import get_db
-from src.services import ExportService, PaperService, PipelineService
+from src.services.export_service import ExportService
+from src.services.paper_service import PaperService
+from src.services.pipeline_service import PipelineService
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -64,8 +67,6 @@ ExportServiceDep = Annotated[ExportService, Depends(get_export_service)]
 
 @lru_cache(maxsize=1)
 def get_auth_client():
-    from supabase import create_client
-
     return create_client(
         settings.supabase.url,
         settings.supabase.anon_key.get_secret_value(),

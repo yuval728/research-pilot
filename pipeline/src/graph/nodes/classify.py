@@ -31,6 +31,10 @@ from src.core.telemetry import TelemetryCollector, track_llm_call
 from src.core.utils import extract_json
 from src.graph.nodes._base import NodeContext, render_prompt
 from src.graph.state import PipelineState
+from src.db.engine import get_supabase_client
+from src.db.session import get_db_context
+import asyncio
+from sqlalchemy import text
 
 _STAGE = "classify"
 _PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "classify_v1.j2"
@@ -59,9 +63,6 @@ class ClassificationResult(BaseModel):
 
 async def _fetch_pdf_bytes(storage_path: str) -> bytes:
     """Download PDF bytes from Supabase Storage."""
-    from src.db.engine import get_supabase_client
-    import asyncio
-
     client = get_supabase_client()
 
     def _do_download():
@@ -134,10 +135,6 @@ async def _load_cached_classification(paper_id: str) -> ClassificationResult | N
     survives across pipeline re-runs without a dedicated table.
     """
     try:
-        from sqlalchemy import text
-
-        from src.db.session import get_db_context
-
         async with get_db_context() as session:
             res = await session.execute(
                 text(
@@ -171,11 +168,6 @@ async def _load_cached_classification(paper_id: str) -> ClassificationResult | N
 async def _persist_classification(paper_id: str, result: ClassificationResult) -> None:
     """Merge classification result into papers.metadata JSONB."""
     try:
-        from sqlalchemy import text
-
-        from src.db.session import get_db_context
-        import json
-
         async with get_db_context() as session:
             await session.execute(
                 text(

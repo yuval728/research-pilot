@@ -24,6 +24,9 @@ from __future__ import annotations
 from typing import Literal
 
 from src.graph.state import PipelineState
+from src.models.run import StageStatus
+from src.core.events import Event, EventType, default_bus
+from src.core.logger import get_logger
 
 # ---------------------------------------------------------------------------
 # Thresholds and constants
@@ -85,8 +88,6 @@ def should_continue_after_classify(
     ``"extract"`` if confidence is acceptable and no fatal errors exist,
     ``"__end__"`` otherwise.
     """
-    from src.models.run import StageStatus
-
     # Check for hard failures in already-completed stages
     stage_statuses = state.get("stage_statuses", {})
     for stage in ("ingest", "classify"):
@@ -98,9 +99,6 @@ def should_continue_after_classify(
     if confidence < CLASSIFICATION_CONFIDENCE_THRESHOLD:
         # Edge functions return only a string — they cannot mutate state.
         # Emit an event so the message is surfaced via SSE / telemetry.
-        from src.core.events import Event, EventType, default_bus
-        from src.core.logger import get_logger
-
         log = get_logger(__name__)
         msg = (
             f"Classification confidence {confidence:.2f} is below "
@@ -149,7 +147,6 @@ def should_run_codegen(
             return "report"
 
     # Also skip if extract failed (no structured data to generate code from)
-    from src.models.run import StageStatus
 
     stage_statuses = state.get("stage_statuses", {})
     if stage_statuses.get("extract") == StageStatus.FAILED:
@@ -188,8 +185,6 @@ def route_on_error(
     -------
     ``next_node`` or ``"__end__"``.
     """
-    from src.models.run import StageStatus
-
     fatal = fatal_if_failed if fatal_if_failed is not None else FATAL_STAGES
     stage_statuses = state.get("stage_statuses", {})
 
@@ -212,7 +207,6 @@ def after_extract_route(
 
     Halts if extraction itself failed (downstream nodes would be no-ops).
     """
-    from src.models.run import StageStatus
 
     stage_statuses = state.get("stage_statuses", {})
     if stage_statuses.get("extract") == StageStatus.FAILED:

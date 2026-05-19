@@ -22,7 +22,13 @@ This stage powers all semantic search functionality in the app.
 from __future__ import annotations
 
 import uuid
+import asyncio
 from typing import Any
+
+import litellm
+from sqlalchemy import select
+from src.db.session import get_db_context
+from src.db.models import EmbeddingORM
 
 from src.core.logger import get_logger
 from src.graph.nodes._base import NodeContext
@@ -85,8 +91,6 @@ async def _embed_chunks(
     api_key: str,
 ) -> list[tuple[str, list[float]]]:
     """Call litellm.aembedding() for each chunk concurrently, return (chunk_type, vector) pairs."""
-    import litellm  # type: ignore[import-untyped]
-    import asyncio
 
     async def _embed_single(chunk_type: str, text: str) -> tuple[str, list[float]]:
         response = await litellm.aembedding(
@@ -113,9 +117,6 @@ async def _store_embeddings(
 ) -> None:
     """Persist embedding vectors to the ``embeddings`` table."""
     try:
-        from src.db.session import get_db_context
-        from src.db.models import EmbeddingORM
-
         async with get_db_context() as session:
             for chunk_type, vector in embedded_chunks:
                 row = EmbeddingORM(
@@ -133,11 +134,6 @@ async def _store_embeddings(
 async def _load_cached_embeddings(paper_id: str) -> bool:
     """Return True if embeddings already exist for this paper."""
     try:
-        from src.db.session import get_db_context
-        from src.db.models import EmbeddingORM
-        from sqlalchemy import select
-        import uuid
-
         async with get_db_context() as session:
             stmt = (
                 select(EmbeddingORM.id)

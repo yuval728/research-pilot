@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 
 from supabase import Client, create_client  # type: ignore[import-untyped]
+from src.core.config import get_settings
 
 
 @functools.lru_cache(maxsize=1)
@@ -25,8 +26,6 @@ def get_supabase_client() -> Client:
     The client is stateless HTTP but caching avoids repeated auth token
     negotiation overhead on every storage operation.
     """
-    from src.core.config import get_settings
-
     settings = get_settings()
     return create_client(
         settings.supabase.url,

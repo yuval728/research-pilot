@@ -35,6 +35,7 @@ from src.graph.state import PipelineState
 from src.core.config import AppSettings
 from src.domains.ai_ml.schema import AiMlExtraction
 from src.db.models import ExtractionORM
+from src.db.session import get_db_context
 
 _STAGE = "extract"
 _SCHEMA_VERSION = "1.0"
@@ -51,8 +52,6 @@ log = get_logger(__name__)
 async def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
     """Return a cached ``AiMlExtraction`` if one exists in the DB."""
     try:
-        from src.db.session import get_db_context
-
         async with get_db_context() as session:
             res = await session.execute(
                 text(
@@ -126,8 +125,6 @@ async def _store_extraction(
 ) -> None:
     """Persist the extraction JSONB to the ``extractions`` table."""
     try:
-        from src.db.session import get_db_context
-
         async with get_db_context() as session:
             row = ExtractionORM(
                 id=uuid.uuid4(),

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,6 +38,8 @@ from src.core.telemetry import TelemetryCollector, track_llm_call
 from src.core.utils import extract_json
 from src.db.engine import get_supabase_client
 from src.db.models import OutputORM
+from src.db.session import get_db_context
+from sqlalchemy import select
 from src.domains.ai_ml.schema import AiMlExtraction
 from src.graph.nodes._base import NodeContext, render_prompt
 from src.graph.state import PipelineState
@@ -74,8 +77,6 @@ def _find_mmdc() -> str | None:
         return mmdc
 
     # Windows npm global installs go to AppData/Roaming/npm
-    import os
-
     appdata = os.environ.get("APPDATA", "")
     if appdata:
         candidate = Path(appdata) / "npm" / "mmdc.cmd"
@@ -90,8 +91,6 @@ _MMDC_PATH: str | None = _find_mmdc()
 
 async def _validate_mermaid(dsl: str) -> tuple[bool, str]:
     """Validate Mermaid DSL syntax using a quick structural check."""
-    import asyncio
-
     stripped = dsl.strip()
     valid_starts = (
         "graph ",
@@ -306,11 +305,7 @@ async def _upload_svg(paper_id: str, diagram_type: DiagramType, dsl: str) -> str
 async def _store_diagram(paper_id: str, diagram: DiagramOutput) -> None:
     """Persist DiagramOutput record to the ``outputs`` table."""
     try:
-        from src.db.session import get_db_context
-
         async with get_db_context() as session:
-            import json
-
             data = {"dsl_code": diagram.dsl_code, "svg_path": diagram.svg_path}
             row = OutputORM(
                 id=uuid.uuid4(),
@@ -327,11 +322,6 @@ async def _store_diagram(paper_id: str, diagram: DiagramOutput) -> None:
 async def _load_cached_diagrams(paper_id: str) -> list[DiagramOutput]:
     """Return cached ``DiagramOutput`` records if they exist in the DB."""
     try:
-        from src.db.session import get_db_context
-        from src.db.models import OutputORM
-        from sqlalchemy import select
-        import uuid
-
         async with get_db_context() as session:
             stmt = (
                 select(OutputORM)

@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Callable
 
+from src.core.logger import get_logger
+
 
 # ---------------------------------------------------------------------------
 # Event types
@@ -179,7 +181,6 @@ class EventBus:
         Errors are caught and re-raised only in DEBUG mode; in production
         they are logged and the remaining handlers continue to run.
         """
-        from src.core.logger import get_logger
 
         log = get_logger(__name__)
 

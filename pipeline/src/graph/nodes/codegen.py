@@ -24,6 +24,11 @@ import re
 import uuid
 from pathlib import Path
 from typing import Any
+import asyncio
+
+from sqlalchemy import select
+from src.db.session import get_db_context
+from src.db.models import OutputORM
 
 import nbformat  # type: ignore[import-untyped]
 import litellm  # type: ignore[import-untyped]
@@ -36,7 +41,6 @@ from src.core.config import get_settings
 from src.core.logger import get_logger
 from src.core.telemetry import TelemetryCollector, track_llm_call
 from src.core.utils import extract_json
-from src.db.models import OutputORM
 from src.graph.nodes._base import NodeContext, render_prompt
 from src.graph.state import PipelineState
 from src.domains.ai_ml.schema import AiMlExtraction
@@ -205,9 +209,6 @@ async def _upload_artefacts(
     python_code: str,
     notebook_bytes: bytes,
 ) -> tuple[str | None, str | None]:
-    """Upload .py and .ipynb to Supabase Storage, return (py_path, nb_path)."""
-    import asyncio
-
     def _do_upload() -> tuple[str | None, str | None]:
         try:
             client = get_supabase_client()
@@ -238,8 +239,6 @@ async def _upload_artefacts(
 async def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
     """Persist CodeOutput record to the ``outputs`` table."""
     try:
-        from src.db.session import get_db_context
-
         async with get_db_context() as session:
             if code_output.python_path:
                 session.add(
@@ -267,11 +266,6 @@ async def _store_code_output(paper_id: str, code_output: CodeOutput) -> None:
 async def _load_cached_code(paper_id: str) -> CodeOutput | None:
     """Return a cached ``CodeOutput`` if one exists in the DB."""
     try:
-        from src.db.session import get_db_context
-        from src.db.models import OutputORM
-        from sqlalchemy import select
-        import uuid
-
         async with get_db_context() as session:
             stmt = (
                 select(OutputORM)
@@ -281,7 +275,7 @@ async def _load_cached_code(paper_id: str) -> CodeOutput | None:
             res = await session.execute(stmt)
             rows = res.scalars().all()
             if rows:
-                return OutputDeserializer.parse_code(rows)
+                return OutputDeserializer.parse_code(list(rows))
     except Exception as exc:  # noqa: BLE001
         log.debug("codegen_cache_miss", reason=str(exc))
     return None

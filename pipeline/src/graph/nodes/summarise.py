@@ -20,7 +20,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import litellm  # type: ignore[import-untyped]
+import litellm
+import io
+import json
+import pypdf
+from sqlalchemy import select
+from src.db.session import get_db_context
 
 
 from src.core.config import get_settings
@@ -77,8 +82,6 @@ async def _call_gemini_summarise_async(
 async def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> None:
     """Persist all SummaryOutput records to the ``outputs`` table."""
     try:
-        from src.db.session import get_db_context
-
         async with get_db_context() as session:
             for summary in summaries:
                 row = OutputORM(
@@ -97,11 +100,6 @@ async def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> Non
 async def _load_cached_summaries(paper_id: str) -> list[SummaryOutput]:
     """Return cached ``SummaryOutput`` records if they exist in the DB."""
     try:
-        from src.db.session import get_db_context
-        from src.db.models import OutputORM
-        from sqlalchemy import select
-        import uuid
-
         async with get_db_context() as session:
             stmt = (
                 select(OutputORM)
@@ -171,8 +169,6 @@ async def summarise_node(state: PipelineState) -> dict[str, Any]:
         paper_text: str | None = None
         if pdf_bytes:
             try:
-                import io
-                import pypdf
 
                 def _extract():
                     reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
@@ -189,8 +185,6 @@ async def summarise_node(state: PipelineState) -> dict[str, Any]:
 
         collector = TelemetryCollector(run_id=ctx.run_id, paper_id=ctx.paper_id)
         levels = list(SummaryLevel)
-
-        import json
 
         extraction_json = json.dumps(extraction.model_dump(mode="json"), indent=2)
 

@@ -26,7 +26,16 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+import arxiv  # type: ignore[import-untyped]
+import asyncio
+import httpx
+import json
+from sqlalchemy import text
 from typing import Any
+
+from src.db.session import get_db_context
+from src.db.engine import get_supabase_client
+from src.db.models import PaperORM
 
 from src.core.exceptions import PDFFetchError, DuplicatePaperError, StageError
 from src.core.logger import get_logger
@@ -50,10 +59,6 @@ def _compute_sha256(data: bytes) -> str:
 
 
 async def _fetch_arxiv(arxiv_id: str) -> bytes:
-    """Download a PDF from arXiv by its identifier (e.g. ``'2301.00001'``)."""
-    import arxiv  # type: ignore[import-untyped]
-    import asyncio
-
     def _search():
         client = arxiv.Client()
         search = arxiv.Search(id_list=[arxiv_id])
@@ -72,9 +77,6 @@ async def _fetch_arxiv(arxiv_id: str) -> bytes:
 
 
 async def _fetch_url(url: str) -> bytes:
-    """Fetch raw bytes from *url* following redirects."""
-    import httpx
-
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
             resp = await client.get(url)
@@ -101,10 +103,6 @@ async def _fetch_doi(doi: str) -> bytes:
 async def _check_duplicate(content_hash: str) -> None:
     """Raise ``DuplicatePaperError`` if this content hash is already in the DB."""
     try:
-        from sqlalchemy import text
-
-        from src.db.session import get_db_context
-
         async with get_db_context() as session:
             res = await session.execute(
                 text(
@@ -127,10 +125,6 @@ async def _check_duplicate(content_hash: str) -> None:
 
 
 async def _upload_pdf(pdf_bytes: bytes, storage_path: str) -> None:
-    """Upload pdf_bytes to Supabase Storage under *storage_path*."""
-    from src.db.engine import get_supabase_client
-    import asyncio
-
     client = get_supabase_client()
 
     def _do_upload():
@@ -150,10 +144,6 @@ async def _create_paper_row(
     metadata: PaperMetadata | None,
     content_hash: str,
 ) -> None:
-    """Insert a ``PaperORM`` row asynchronously."""
-    from src.db.session import get_db_context
-    from src.db.models import PaperORM
-
     meta_dict: dict[str, Any] = {"content_hash": content_hash}
     if metadata:
         meta_dict.update(metadata.model_dump(exclude_none=True))
@@ -174,12 +164,6 @@ async def _update_paper_storage_path(
 ) -> None:
     """Update an existing paper record with its PDF storage path and content hash."""
     try:
-        from sqlalchemy import text
-
-        from src.db.session import get_db_context
-
-        import json
-
         async with get_db_context() as session:
             # Passing the dict as a single JSONB parameter is more robust than jsonb_build_object
             await session.execute(

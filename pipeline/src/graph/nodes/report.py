@@ -16,9 +16,15 @@ Responsibilities
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Any
+
+from sqlalchemy import select
+from src.db.engine import get_supabase_client
+from src.db.session import get_db_context
+from src.db.models import OutputORM
 
 from src.core.logger import get_logger
 from src.graph.state import PipelineState
@@ -266,14 +272,11 @@ def _build_markdown(
 
 async def _upload_report(paper_id: str, markdown: str) -> str:
     """Upload the Markdown report to Supabase Storage, return storage path."""
-    import asyncio
 
     storage_path = f"{paper_id}/report.md"
 
     def _do_upload() -> str:
         try:
-            from src.db.engine import get_supabase_client
-
             client = get_supabase_client()
             client.storage.from_(_OUTPUTS_BUCKET).upload(
                 path=storage_path,
@@ -291,9 +294,6 @@ async def _upload_report(paper_id: str, markdown: str) -> str:
 async def _store_report_output(paper_id: str, report: ReportOutput) -> None:
     """Persist ReportOutput to the ``outputs`` table."""
     try:
-        from src.db.session import get_db_context
-        from src.db.models import OutputORM
-
         async with get_db_context() as session:
             row = OutputORM(
                 id=uuid.uuid4(),
@@ -310,11 +310,6 @@ async def _store_report_output(paper_id: str, report: ReportOutput) -> None:
 async def _load_cached_report(paper_id: str) -> str | None:
     """Return a cached report path if one exists in the DB."""
     try:
-        from src.db.session import get_db_context
-        from src.db.models import OutputORM
-        from sqlalchemy import select
-        import uuid
-
         async with get_db_context() as session:
             stmt = (
                 select(OutputORM.storage_path)

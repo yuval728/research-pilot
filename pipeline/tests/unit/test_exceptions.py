@@ -16,7 +16,7 @@ from src.core.exceptions import (
     DependencyNotMetError,
     DuplicatePaperError,
     EmbeddingError,
-    FileNotFoundError,
+    StorageFileNotFoundError,
     FileUploadError,
     IngestionError,
     LLMError,
@@ -218,14 +218,14 @@ class TestFileUploadError:
         assert isinstance(err, ResearchPilotError)
 
 
-class TestFileNotFoundError:
+class TestStorageFileNotFoundError:
     def test_fields(self):
-        err = FileNotFoundError("not found", bucket="outputs", path="x/y.svg")
+        err = StorageFileNotFoundError("not found", bucket="outputs", path="x/y.svg")
         assert err.bucket == "outputs"
         assert err.path == "x/y.svg"
 
     def test_inheritance(self):
-        err = FileNotFoundError("m", bucket="b", path="p")
+        err = StorageFileNotFoundError("m", bucket="b", path="p")
         assert isinstance(err, StorageError)
 
 

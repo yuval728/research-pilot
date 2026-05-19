@@ -10,6 +10,7 @@ conversion logic was duplicated (Issue #18).
 from __future__ import annotations
 
 from datetime import timezone
+import json
 
 from src.db.models import OutputORM, PipelineRunORM, StageResultORM
 from src.models.output import (
@@ -51,8 +52,6 @@ class OutputDeserializer:
 
         # Legacy JSON format compatibility
         if orm.storage_path and orm.storage_path.startswith("json:"):
-            import json
-
             try:
                 data = json.loads(orm.storage_path[5:])
                 dsl_code = data.get("dsl_code", dsl_code)

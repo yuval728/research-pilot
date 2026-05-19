@@ -19,6 +19,8 @@ from src.graph.pipeline import research_pipeline
 from src.graph.state import PipelineState, make_initial_state
 from src.models.paper import PaperMetadata
 from src.models.run import PipelineRun, RunStatus, StageResult, StageStatus
+from src.services.converters import run_orm_to_pydantic, stage_orm_to_pydantic
+import structlog
 
 
 class PipelineService:
@@ -29,14 +31,10 @@ class PipelineService:
 
     def _to_stage_pydantic(self, orm: StageResultORM) -> StageResult:
         """Convert StageResultORM to StageResult."""
-        from src.services.converters import stage_orm_to_pydantic
-
         return stage_orm_to_pydantic(orm)
 
     def _to_run_pydantic(self, orm: PipelineRunORM) -> PipelineRun:
         """Convert PipelineRunORM to PipelineRun, including its stages."""
-        from src.services.converters import run_orm_to_pydantic
-
         return run_orm_to_pydantic(orm)
 
     @staticmethod
@@ -134,7 +132,7 @@ class PipelineService:
                         run_orm.started_at = datetime.now(timezone.utc)
                     await session.commit()
 
-            async for update_dict in research_pipeline.astream(initial_state):
+            async for update_dict in research_pipeline.astream(initial_state):  # type: ignore[arg-type]
                 async with get_db_context() as session:
                     run_orm = await session.get(PipelineRunORM, run_id)
                     if not run_orm:
@@ -241,8 +239,6 @@ class PipelineService:
             return
         exc = task.exception()
         if exc:
-            import structlog
-
             structlog.get_logger("pipeline_service").error(
                 "background_pipeline_failed",
                 error=str(exc),

@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
 import sentry_sdk
+import sqlalchemy
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -101,8 +102,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Warm the connection pool by making a trivial connection
     logger.info("startup", step="warm_db_pool")
     try:
-        import sqlalchemy
-
         async with engine.connect() as conn:
             await conn.execute(sqlalchemy.text("SELECT 1"))
     except Exception:  # noqa: BLE001

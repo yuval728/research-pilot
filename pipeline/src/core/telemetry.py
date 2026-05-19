@@ -28,6 +28,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Generator
+import litellm
+from langfuse import Langfuse
+from src.core.config import get_settings
+from src.core.logger import get_logger
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +163,6 @@ class TelemetryCollector:
         Silently skips if Langfuse is disabled in settings.
         """
         try:
-            from src.core.config import get_settings
-
             settings = get_settings()
             if not settings.langfuse.enabled:
                 return
@@ -188,8 +190,6 @@ class TelemetryCollector:
             )
 
         except Exception as exc:  # noqa: BLE001
-            from src.core.logger import get_logger
-
             get_logger(__name__).warning(
                 "langfuse_flush_failed",
                 run_id=record.run_id,
@@ -211,14 +211,10 @@ def _get_langfuse() -> Any:
 
     _LANGFUSE_INITED = True
     try:
-        from src.core.config import get_settings
-
         settings = get_settings()
 
         if not settings.langfuse.enabled:
             return None
-
-        from langfuse import Langfuse
 
         _LANGFUSE_CLIENT = Langfuse(
             public_key=settings.langfuse.public_key.get_secret_value(),
@@ -268,8 +264,6 @@ class _LLMCallContext:
                 pass
 
             try:
-                import litellm
-
                 cost_usd = litellm.completion_cost(completion_response=self._response)
             except Exception:  # noqa: BLE001
                 pass
@@ -322,8 +316,6 @@ def track_llm_call(
         latency_ms = (time.perf_counter() - start) * 1000
         record = ctx._build_record(latency_ms)
         collector.add(record)
-
-        from src.core.logger import get_logger
 
         get_logger(__name__).debug(
             "llm_call_tracked",

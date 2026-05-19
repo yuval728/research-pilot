@@ -72,11 +72,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from src.core.logger import get_logger
+
 from langgraph.graph import END, START, StateGraph  # type: ignore[import-untyped]
 
 from src.graph.edges import (
     after_extract_route,
     should_continue_after_classify,
+    should_run_codegen,
 )
 from src.graph.nodes import (
     classify_node,
@@ -140,13 +143,8 @@ async def parallel_stages_node(state: PipelineState) -> dict[str, Any]:
     ---------------
     - All fields that summarise / embed / diagram / codegen individually write
     """
-    from src.core.logger import get_logger
-
     log = get_logger(__name__)
     run_id = state["run_id"]
-
-    # Determine whether to run codegen (respect theory-domain gate)
-    from src.graph.edges import should_run_codegen
 
     run_codegen = should_run_codegen(state) == "codegen"
 

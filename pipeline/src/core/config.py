@@ -22,8 +22,9 @@ Nothing outside this module should read ``os.environ`` directly.
 from __future__ import annotations
 
 import functools
+import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 import yaml
 from pydantic import Field, SecretStr
@@ -193,8 +194,6 @@ def _build_settings(yaml_path: Path | None = None) -> AppSettings:
     The YAML file is read first and its keys are injected into the nested
     settings objects, then pydantic-settings applies env-var overrides on top.
     """
-    import os
-
     yaml_path = yaml_path or Path(
         os.getenv("RESEARCH_PILOT_CONFIG_PATH", "config.yaml")
     )
@@ -203,7 +202,9 @@ def _build_settings(yaml_path: Path | None = None) -> AppSettings:
     # Flatten YAML overrides into env-var format so pydantic-settings picks
     # them up with lower priority than real env vars.
     # We do this by constructing nested objects explicitly.
-    def _section(cls: type[BaseSettings], key: str) -> BaseSettings:
+    TSettings = TypeVar("TSettings", bound=BaseSettings)
+
+    def _section(cls: type[TSettings], key: str) -> TSettings:
         section_data = overrides.get(key, {})
         return cls(**section_data)
 

@@ -35,6 +35,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, TypeVar
 
+from pydantic import ValidationError as PydanticValidationError
+from src.core.logger import get_logger
+
 from tenacity import (
     RetryCallState,
     retry,
@@ -63,9 +66,6 @@ _MAX_WAIT = 60.0  # seconds
 
 
 def _log_retry(retry_state: RetryCallState) -> None:
-    """After-retry callback: log the attempt with structlog."""
-    from src.core.logger import get_logger
-
     log = get_logger(__name__)
 
     exc = retry_state.outcome.exception() if retry_state.outcome else None
@@ -171,7 +171,7 @@ def with_validation_retry(fn: _F) -> _F:
     ``_MAX_ATTEMPTS`` so the two retry mechanisms stay in sync.
     """
     try:
-        from pydantic import ValidationError as PydanticValidationError
+        pass
     except ImportError as e:  # pragma: no cover
         raise ImportError("pydantic is required for with_validation_retry") from e
 

@@ -21,6 +21,7 @@ from src.models.output import (
     DiagramType,
     OutputBundle,
 )
+from src.services.converters import OutputDeserializer
 
 settings = get_settings()
 
@@ -112,8 +113,6 @@ class ExportService:
             extraction=None,
         )
         code_paths = {}
-
-        from src.services.converters import OutputDeserializer
 
         for orm in orms:
             t = orm.output_type

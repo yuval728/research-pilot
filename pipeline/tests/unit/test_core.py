@@ -20,7 +20,7 @@ from src.core.exceptions import (
     DependencyNotMetError,
     DuplicatePaperError,
     EmbeddingError,
-    FileNotFoundError,
+    StorageFileNotFoundError,
     FileUploadError,
     IngestionError,
     LLMError,
@@ -177,7 +177,7 @@ class TestStorageErrors:
     def test_hierarchy(self):
         assert issubclass(StorageError, ResearchPilotError)
         assert issubclass(FileUploadError, StorageError)
-        assert issubclass(FileNotFoundError, StorageError)
+        assert issubclass(StorageFileNotFoundError, StorageError)
 
     def test_file_upload_error_attributes(self):
         inner = ConnectionError("network error")
@@ -192,7 +192,9 @@ class TestStorageErrors:
         assert exc.cause is inner
 
     def test_file_not_found_attributes(self):
-        exc = FileNotFoundError("not found", bucket="outputs", path="outputs/report.md")
+        exc = StorageFileNotFoundError(
+            "not found", bucket="outputs", path="outputs/report.md"
+        )
         assert exc.bucket == "outputs"
         assert exc.path == "outputs/report.md"
 

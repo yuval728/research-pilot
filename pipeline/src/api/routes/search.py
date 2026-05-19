@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import uuid
 
+import structlog
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -64,8 +66,6 @@ async def search_papers(
     try:
         return await paper_service.search_papers(body.query, limit=body.limit)
     except Exception as exc:  # noqa: BLE001
-        import structlog
-
         structlog.get_logger(__name__).exception("search_failed", error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -116,8 +116,6 @@ async def similar_papers(
     try:
         candidates = await paper_service.search_papers(query, limit=limit + 1)
     except Exception as exc:  # noqa: BLE001
-        import structlog
-
         structlog.get_logger(__name__).exception(
             "similarity_search_failed", error=str(exc)
         )
