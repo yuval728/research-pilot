@@ -12,7 +12,7 @@ import anyio
 import arxiv  # type: ignore[import-untyped]
 import httpx
 from litellm import aembedding
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from supabase import Client
@@ -48,12 +48,20 @@ class PaperService:
 
     def _to_pydantic(self, orm: PaperORM) -> Paper:
         """Helper to convert ORM to Pydantic model."""
+        metadata_dict = dict(orm.metadata_ or {})
+        # Normalize legacy classification keys into canonical API fields.
+        if metadata_dict.get("domain") is None and metadata_dict.get("cls_domain"):
+            metadata_dict["domain"] = metadata_dict["cls_domain"]
+        if metadata_dict.get("sub_domain") is None and metadata_dict.get(
+            "cls_sub_domain"
+        ):
+            metadata_dict["sub_domain"] = metadata_dict["cls_sub_domain"]
         return Paper(
             id=orm.id,
             source=PaperSource(orm.source),
             source_url=orm.source_url,  # type: ignore[arg-type]
             pdf_storage_path=orm.pdf_storage_path,
-            metadata=PaperMetadata(**orm.metadata_) if orm.metadata_ else None,
+            metadata=PaperMetadata(**metadata_dict) if metadata_dict else None,
             created_at=orm.created_at.replace(tzinfo=timezone.utc),
             updated_at=orm.updated_at.replace(tzinfo=timezone.utc),
         )
@@ -317,10 +325,21 @@ class PaperService:
                 cause=exc,
             ) from exc
 
+        distance_subq = (
+            select(
+                EmbeddingORM.paper_id.label("paper_id"),
+                func.min(EmbeddingORM.embedding.cosine_distance(query_vec)).label(
+                    "best_distance"
+                ),
+            )
+            .group_by(EmbeddingORM.paper_id)
+            .subquery()
+        )
+
         stmt = (
             select(PaperORM)
-            .join(EmbeddingORM, PaperORM.id == EmbeddingORM.paper_id)
-            .order_by(EmbeddingORM.embedding.cosine_distance(query_vec))
+            .join(distance_subq, PaperORM.id == distance_subq.c.paper_id)
+            .order_by(distance_subq.c.best_distance)
             .limit(limit)
         )
         result = await self.db.execute(stmt)

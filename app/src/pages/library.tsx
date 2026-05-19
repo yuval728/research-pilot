@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, BookOpen, Filter } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Plus, BookOpen, Filter, Layers3 } from 'lucide-react';
 import { Header } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
 import { SearchBar } from '@/components/library/search-bar';
@@ -8,10 +8,7 @@ import { papersApi } from '@/lib/api/papers';
 import { searchApi } from '@/lib/api/search';
 import { Paper, PaperListItem } from '@/types';
 import { useNavigate } from 'react-router-dom';
-import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
 
-const DOMAINS = ['All', 'NLP', 'Computer Vision', 'Reinforcement Learning', 'Generative'];
 const SORT_OPTIONS = ['Newest', 'Oldest', 'Title A-Z', 'Title Z-A'] as const;
 type SortOption = (typeof SORT_OPTIONS)[number];
 
@@ -22,7 +19,8 @@ export default function LibraryPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeDomain, setActiveDomain] = useState('All');
+  const [activeDomain, setActiveDomain] = useState('All Domains');
+  const [activeSubdomain, setActiveSubdomain] = useState('All Subdomains');
   const [sortBy, setSortBy] = useState<SortOption>('Newest');
   const navigate = useNavigate();
 
@@ -61,16 +59,48 @@ export default function LibraryPage() {
     }
   }, []);
 
+  const allPapers = papers.filter((p) => p.metadata);
+
+  const domainOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of allPapers) {
+      if (p.metadata?.domain?.trim()) set.add(p.metadata.domain.trim());
+    }
+    return ['All Domains', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [allPapers]);
+
+  const subdomainOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of allPapers) {
+      const md = p.metadata;
+      if (!md?.sub_domain?.trim()) continue;
+      if (activeDomain !== 'All Domains' && md.domain !== activeDomain) continue;
+      set.add(md.sub_domain.trim());
+    }
+    return ['All Subdomains', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [allPapers, activeDomain]);
+
+  useEffect(() => {
+    if (!subdomainOptions.includes(activeSubdomain)) {
+      setActiveSubdomain('All Subdomains');
+    }
+  }, [activeSubdomain, subdomainOptions]);
+
   const baseList = searchResults !== null ? searchResults : papers;
 
   const displayPapers = baseList
     .filter((p) => {
       if (!p.metadata) return false;
-      if (activeDomain !== 'All') {
-        const selected = activeDomain.toLowerCase();
-        const d = p.metadata.domain?.toLowerCase() ?? '';
-        const sd = p.metadata.sub_domain?.toLowerCase() ?? '';
-        if (!d.includes(selected) && !sd.includes(selected)) return false;
+
+      if (activeDomain !== 'All Domains' && p.metadata.domain !== activeDomain) {
+        return false;
+      }
+
+      if (
+        activeSubdomain !== 'All Subdomains' &&
+        p.metadata.sub_domain !== activeSubdomain
+      ) {
+        return false;
       }
 
       if (searchResults === null && searchQuery.trim().length > 2) {
@@ -113,39 +143,45 @@ export default function LibraryPage() {
       <div className="p-8 max-w-6xl mx-auto w-full space-y-8">
         <SearchBar onSearch={handleSearch} isSearching={isSearching} />
 
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-            {DOMAINS.map((domain) => (
-              <Badge
-                key={domain}
-                variant="secondary"
-                onClick={() => setActiveDomain(domain)}
-                className={cn(
-                  'px-4 py-1.5 cursor-pointer transition-colors border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70',
-                  activeDomain === domain
-                    ? 'bg-primary text-white border-primary'
-                    : 'bg-secondary/70 text-foreground/80 hover:bg-secondary hover:text-foreground',
-                )}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setActiveDomain(domain);
-                  }
-                }}
-              >
-                {domain}
-              </Badge>
-            ))}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+          <div className="relative lg:col-span-1">
+            <Layers3 className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <select
+              value={activeDomain}
+              onChange={(e) => {
+                setActiveDomain(e.target.value);
+                setActiveSubdomain('All Subdomains');
+              }}
+              className="h-10 w-full rounded-lg border border-border bg-card pl-9 pr-8 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
+              aria-label="Filter by domain"
+            >
+              {domainOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
           </div>
 
-          <div className="relative">
+          <div className="relative lg:col-span-1">
+            <Layers3 className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <select
+              value={activeSubdomain}
+              onChange={(e) => setActiveSubdomain(e.target.value)}
+              className="h-10 w-full rounded-lg border border-border bg-card pl-9 pr-8 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
+              aria-label="Filter by subdomain"
+              disabled={subdomainOptions.length <= 1}
+            >
+              {subdomainOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="relative lg:col-span-1 lg:col-start-4">
             <Filter className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as SortOption)}
-              className="h-9 rounded-md border border-border bg-card pl-9 pr-8 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
+              className="h-10 w-full rounded-lg border border-border bg-card pl-9 pr-8 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
               aria-label="Sort papers"
             >
               {SORT_OPTIONS.map((option) => (

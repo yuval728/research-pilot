@@ -14,11 +14,32 @@ export function Sidebar() {
 
   // Fetch real paper count for the usage widget
   useEffect(() => {
-    papersApi
-      .listPapers()
-      .then((papers) => setPaperCount(papers.length))
-      .catch(() => setPaperCount(null));
-  }, []);
+    let active = true;
+    const refreshCount = async () => {
+      try {
+        const papers = await papersApi.listPapers();
+        if (active) setPaperCount(papers.length);
+      } catch {
+        if (active) setPaperCount(null);
+      }
+    };
+    void refreshCount();
+    const onFocus = () => {
+      void refreshCount();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshCount();
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      active = false;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [location.pathname]);
 
   const navItems = [
     { name: 'Library', icon: BookOpen, path: '/library' },
@@ -26,9 +47,10 @@ export function Sidebar() {
   ];
 
   // Derive a display name from email (part before @)
-  const displayName = user?.email
-    ? user.email.split('@')[0]
-    : 'User';
+  const displayName =
+    (user?.user_metadata?.full_name as string | undefined) ||
+    (user?.user_metadata?.name as string | undefined) ||
+    'Researcher';
 
   return (
     <div className="w-60 bg-[#0f0f0f] border-r border-[#1a1a1a] flex flex-col h-screen sticky top-0">

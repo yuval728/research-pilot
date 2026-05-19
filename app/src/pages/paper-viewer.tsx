@@ -86,6 +86,7 @@ export default function PaperViewerPage() {
   const [staticRun, setStaticRun] = useState<PipelineRun | null>(null);
   const [pipelineRunId, setPipelineRunId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [downloading, setDownloading] = useState<'report' | 'code' | null>(null);
   const isAllowedTab = (value: string | null): value is (typeof TAB_VALUES)[number] =>
     value !== null && TAB_VALUES.includes(value as (typeof TAB_VALUES)[number]);
   const initialTab = searchParams.get('tab');
@@ -196,21 +197,27 @@ export default function PaperViewerPage() {
 
   const handleDownloadReport = useCallback(async () => {
     if (!id) return;
+    setDownloading('report');
     try {
       const md = await papersApi.getReportMarkdown(id);
       downloadBlob(new Blob([md], { type: 'text/markdown' }), `${id}_report.md`);
     } catch {
       toast.error('Failed to download report');
+    } finally {
+      setDownloading(null);
     }
   }, [id]);
 
   const handleDownloadCode = useCallback(async () => {
     if (!id) return;
+    setDownloading('code');
     try {
       const code = await papersApi.getCodeSource(id);
       downloadBlob(new Blob([code], { type: 'text/x-python' }), `${id}_implementation.py`);
     } catch {
       toast.error('Failed to download code');
+    } finally {
+      setDownloading(null);
     }
   }, [id]);
 
@@ -305,20 +312,28 @@ export default function PaperViewerPage() {
             variant="outline"
             size="sm"
             className="h-8 border-[#1a1a1a] text-[10px] font-bold uppercase tracking-widest"
-            disabled={!bundle?.report}
+            disabled={!bundle?.report || downloading !== null}
             onClick={handleDownloadReport}
           >
-            <Download className="w-3.5 h-3.5 mr-2" />
+            {downloading === 'report' ? (
+              <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5 mr-2" />
+            )}
             Report (MD)
           </Button>
           <Button
             variant="outline"
             size="sm"
             className="h-8 border-[#1a1a1a] text-[10px] font-bold uppercase tracking-widest"
-            disabled={!bundle?.code?.python_path}
+            disabled={!bundle?.code?.python_path || downloading !== null}
             onClick={handleDownloadCode}
           >
-            <Download className="w-3.5 h-3.5 mr-2" />
+            {downloading === 'code' ? (
+              <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5 mr-2" />
+            )}
             Code (.PY)
           </Button>
           {!hasOutputs && !isRunActive && (
