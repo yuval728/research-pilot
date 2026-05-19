@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -50,6 +50,7 @@ const STAGE_LABELS: Record<string, string> = {
   codegen: 'Code',
   report: 'Report',
 };
+const TAB_VALUES = ['summary', 'diagrams', 'code', 'report'] as const;
 
 const initialLoadPromises = new Map<
   string,
@@ -77,6 +78,7 @@ function stageDuration(stage: StageResult | undefined): string {
 export default function PaperViewerPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [paper, setPaper] = useState<Paper | null>(null);
   const [bundle, setBundle] = useState<OutputBundle | null>(null);
@@ -84,6 +86,11 @@ export default function PaperViewerPage() {
   const [staticRun, setStaticRun] = useState<PipelineRun | null>(null);
   const [pipelineRunId, setPipelineRunId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const isAllowedTab = (value: string | null): value is (typeof TAB_VALUES)[number] =>
+    value !== null && TAB_VALUES.includes(value as (typeof TAB_VALUES)[number]);
+  const initialTab = searchParams.get('tab');
+  const normalizedTab = isAllowedTab(initialTab) ? initialTab : 'summary';
+  const [activeTab, setActiveTab] = useState(normalizedTab);
 
   const activeRun = (staticRun ?? null) as Partial<PipelineRun> | null;
   const { run: liveRun, done: runDone } = usePipelineSSE(
@@ -112,6 +119,23 @@ export default function PaperViewerPage() {
     setStaticRun(latestRun);
     setPipelineRunId(latestRun?.id ?? null);
   }, [id]);
+
+  useEffect(() => {
+    if (normalizedTab !== activeTab) {
+      setActiveTab(normalizedTab);
+    }
+  }, [activeTab, normalizedTab]);
+
+  useEffect(() => {
+    const current = searchParams.get('tab');
+    if (current && !isAllowedTab(current)) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('tab', 'summary');
+        return next;
+      });
+    }
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     // Only check if it JUST finished to trigger a refresh
@@ -329,7 +353,19 @@ export default function PaperViewerPage() {
       ) : (
         <div className="flex-1 flex gap-8 p-8 max-w-[1600px] mx-auto w-full overflow-hidden">
           <div className="flex-[0.65] min-w-0">
-            <Tabs defaultValue="summary" className="w-full">
+            <Tabs
+              value={activeTab}
+              onValueChange={(value) => {
+                const safeTab = isAllowedTab(value) ? value : 'summary';
+                setActiveTab(safeTab);
+                setSearchParams((prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.set('tab', safeTab);
+                  return next;
+                });
+              }}
+              className="w-full"
+            >
               <TabsList className="bg-transparent border-b border-[#1a1a1a] w-full justify-start rounded-none h-12 p-0 gap-8">
                 {[
                   { value: 'summary', label: 'Summary' },

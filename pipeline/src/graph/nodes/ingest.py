@@ -172,13 +172,13 @@ async def _update_paper_storage_path(
                     UPDATE papers
                     SET pdf_storage_path = :path,
                         metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:new_meta AS JSONB)
-                    WHERE id = :pid
+                    WHERE id = CAST(:pid AS UUID)
                     """
                 ),
                 {
                     "path": storage_path,
                     "new_meta": json.dumps({"content_hash": content_hash}),
-                    "pid": paper_id,
+                    "pid": str(uuid.UUID(paper_id)),
                 },
             )
             await session.commit()
@@ -237,16 +237,46 @@ async def ingest_node(state: PipelineState) -> dict[str, Any]:
         # PDF download.  We fetch it here under the EXISTING paper_id.
         if existing_paper_id and not existing_storage_path:
             paper_id = existing_paper_id
+            source_hint = (
+                "arxiv"
+                if metadata and metadata.arxiv_id
+                else "doi"
+                if metadata and metadata.doi
+                else "unknown"
+            )
             log.info(
                 "ingest_node.fetching_pdf_for_existing_paper",
                 run_id=ctx.run_id,
                 paper_id=paper_id,
+                source_hint=source_hint,
+                has_metadata=metadata is not None,
             )
 
             if pdf_bytes is None:
-                pdf_bytes, _ = await _fetch_pdf_bytes(metadata, ctx.run_id)
+                try:
+                    pdf_bytes, _ = await _fetch_pdf_bytes(metadata, ctx.run_id)
+                except StageError as exc:
+                    raise StageError(
+                        "Failed to fetch PDF for existing paper: missing or invalid source metadata.",
+                        stage_name=_STAGE,
+                        run_id=ctx.run_id,
+                        cause=exc,
+                    ) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise StageError(
+                        "Failed to fetch PDF for existing paper.",
+                        stage_name=_STAGE,
+                        run_id=ctx.run_id,
+                        cause=exc,
+                    ) from exc
 
             content_hash = _compute_sha256(pdf_bytes)
+            log.info(
+                "ingest_node.pdf_fetched_for_existing_paper",
+                run_id=ctx.run_id,
+                paper_id=paper_id,
+                bytes_len=len(pdf_bytes),
+            )
             storage_path = f"{paper_id}/paper.pdf"
 
             try:

@@ -88,8 +88,7 @@ async def _store_summaries(paper_id: str, summaries: list[SummaryOutput]) -> Non
                     id=uuid.uuid4(),
                     paper_id=uuid.UUID(paper_id),
                     output_type=f"summary_{summary.level.value}",
-                    storage_path=None,
-                    content=summary.content,
+                    storage_path=f"inline:{summary.content}",
                 )
                 session.add(row)
             await session.commit()

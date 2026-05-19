@@ -18,7 +18,8 @@ from sqlalchemy.orm import selectinload
 from supabase import Client
 
 from src.core.config import get_settings
-from src.core.exceptions import FileUploadError
+from src.core.exceptions import EmbeddingError, FileUploadError
+from src.core.logger import get_logger
 from src.db.engine import get_supabase_client
 from src.db.models import EmbeddingORM, PaperORM
 from src.db.models import PipelineRunORM
@@ -27,6 +28,8 @@ from src.models.run import PipelineRun, StageResult
 from src.services.converters import run_orm_to_pydantic, stage_orm_to_pydantic
 
 settings = get_settings()
+_EMBEDDING_DIM = 1536
+log = get_logger(__name__)
 
 
 class PaperService:
@@ -67,6 +70,8 @@ class PaperService:
         source_url: str | None = None,
         pdf_storage_path: str | None = None,
         metadata: PaperMetadata | None = None,
+        identifier_type: str | None = None,
+        identifier_value: str | None = None,
     ) -> Paper:
         """Core ingest logic: creates the DB record."""
         paper_id = uuid.uuid4()
@@ -82,7 +87,22 @@ class PaperService:
         self.db.add(orm)
         await self.db.commit()
         await self.db.refresh(orm)
+        log.info(
+            "paper_created_new",
+            paper_id=str(orm.id),
+            source=source.value,
+            identifier_type=identifier_type,
+            identifier_value=identifier_value,
+        )
         return self._to_pydantic(orm)
+
+    async def _find_existing_by_metadata_identifier(
+        self, key: str, value: str
+    ) -> PaperORM | None:
+        """Find an existing paper by metadata JSONB identifier value."""
+        stmt = select(PaperORM).where(PaperORM.metadata_[key].astext == value)
+        res = await self.db.execute(stmt)
+        return res.scalars().first()
 
     async def create_from_upload(self, file_bytes: bytes, filename: str) -> Paper:
         """Validates file is PDF, uploads to Supabase, and inserts Paper."""
@@ -122,6 +142,17 @@ class PaperService:
         if not match:
             raise ValueError("Invalid arXiv URL format")
         arxiv_id = match.group(1)
+        existing = await self._find_existing_by_metadata_identifier(
+            "arxiv_id", arxiv_id
+        )
+        if existing:
+            log.info(
+                "paper_dedupe_hit",
+                paper_id=str(existing.id),
+                identifier_type="arxiv_id",
+                identifier_value=arxiv_id,
+            )
+            return self._to_pydantic(existing)
 
         def _fetch_arxiv() -> arxiv.Result:
             client = arxiv.Client()
@@ -156,15 +187,30 @@ class PaperService:
             source_url=arxiv_url,
             pdf_storage_path=None,  # Ingest node will fill this when it downloads
             metadata=metadata,
+            identifier_type="arxiv_id",
+            identifier_value=arxiv_id,
         )
 
     async def create_from_doi(self, doi: str) -> Paper:
         """Resolves via CrossRef, and runs ingest."""
+        normalized_doi = doi.strip().lower()
+        existing = await self._find_existing_by_metadata_identifier(
+            "doi", normalized_doi
+        )
+        if existing:
+            log.info(
+                "paper_dedupe_hit",
+                paper_id=str(existing.id),
+                identifier_type="doi",
+                identifier_value=normalized_doi,
+            )
+            return self._to_pydantic(existing)
+
         # Provide basic CrossRef resolution
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"https://api.crossref.org/works/{doi}")
+            resp = await client.get(f"https://api.crossref.org/works/{normalized_doi}")
             if resp.status_code != 200:
-                raise ValueError(f"CrossRef failed to find DOI: {doi}")
+                raise ValueError(f"CrossRef failed to find DOI: {normalized_doi}")
             data = resp.json().get("message", {})
 
         titles = data.get("title", [])
@@ -185,7 +231,7 @@ class PaperService:
             if data.get("container-title")
             else None,
             year=year,
-            doi=doi,
+            doi=normalized_doi,
             abstract=None,
             arxiv_id=None,
             page_count=None,
@@ -194,12 +240,14 @@ class PaperService:
         )
 
         # CrossRef URLs can be constructed as https://doi.org/...
-        source_url = f"https://doi.org/{doi}"
+        source_url = f"https://doi.org/{normalized_doi}"
 
         return await self._ingest(
             source=PaperSource.DOI,
             source_url=source_url,
             metadata=metadata,
+            identifier_type="doi",
+            identifier_value=normalized_doi,
         )
 
     async def get_paper(self, paper_id: uuid.UUID) -> Paper:
@@ -242,11 +290,32 @@ class PaperService:
 
     async def search_papers(self, query: str, limit: int = 5) -> list[Paper]:
         """Queries pgvector similarity search using LiteLLM."""
-        res = await aembedding(
-            model=settings.gemini.embedding_model,
-            input=[query],
-        )
-        query_vec = res.data[0]["embedding"]
+        try:
+            res = await aembedding(
+                model=settings.gemini.embedding_model,
+                input=[query],
+                dimensions=_EMBEDDING_DIM,
+            )
+            first = res.data[0]
+            raw_vector = (
+                getattr(first, "embedding", None)
+                if hasattr(first, "embedding")
+                else first.get("embedding")
+            )
+            if not isinstance(raw_vector, list):
+                raise ValueError("Embedding response missing vector payload.")
+
+            query_vec = [float(v) for v in raw_vector]
+            if len(query_vec) != _EMBEDDING_DIM:
+                raise ValueError(
+                    f"expected {_EMBEDDING_DIM} dimensions, not {len(query_vec)}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            raise EmbeddingError(
+                "Failed to generate a valid query embedding.",
+                model=settings.gemini.embedding_model,
+                cause=exc,
+            ) from exc
 
         stmt = (
             select(PaperORM)

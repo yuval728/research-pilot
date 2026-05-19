@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import status
 from fastapi.testclient import TestClient
 
+from src.core.exceptions import EmbeddingError
 from src.models.paper import Paper, PaperSource
 
 
@@ -51,3 +52,22 @@ def test_search_papers_empty(test_client: TestClient):
 
     assert response.status_code == status.HTTP_200_OK
     assert len(response.json()) == 0
+
+
+def test_search_papers_embedding_error_returns_structured_payload(
+    test_client: TestClient,
+):
+    with patch(
+        "src.services.paper_service.PaperService.search_papers",
+        new_callable=AsyncMock,
+    ) as mock_search:
+        mock_search.side_effect = EmbeddingError(
+            "Failed to generate a valid query embedding.",
+            model="gemini/text-embedding-004",
+        )
+        response = test_client.post("/api/v1/search", json={"query": "transformer"})
+
+    assert response.status_code == status.HTTP_502_BAD_GATEWAY
+    payload = response.json()
+    assert payload["error"] == "EmbeddingError"
+    assert payload["message"] == "Failed to generate a valid query embedding."

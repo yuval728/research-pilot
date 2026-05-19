@@ -37,22 +37,22 @@
 :root {
     --background: #0a0a0a;
     --foreground: #ffffff;
-    --card: #0f0f0f;
+    --card: #111214;
     --card-foreground: #ffffff;
     --popover: #0f0f0f;
     --popover-foreground: #ffffff;
     --primary: #6366f1;
     --primary-foreground: #ffffff;
-    --secondary: #1a1a1a;
+    --secondary: #1f2227;
     --secondary-foreground: #ffffff;
-    --muted: #1a1a1a;
-    --muted-foreground: #a1a1aa;
+    --muted: #1f2227;
+    --muted-foreground: #b5bcc8;
     --accent: #1a1a1a;
     --accent-foreground: #ffffff;
     --destructive: #ef4444;
     --destructive-foreground: #ffffff;
-    --border: #1a1a1a;
-    --input: #1a1a1a;
+    --border: #2a2e36;
+    --input: #2a2e36;
     --ring: #6366f1;
     --radius: 0.375rem;
 }

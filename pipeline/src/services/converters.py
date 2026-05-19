@@ -31,7 +31,7 @@ class OutputDeserializer:
     def parse_summary(orm: OutputORM) -> SummaryOutput:
         """Parse an OutputORM record into a SummaryOutput."""
         level_str = orm.output_type.replace("summary_", "")
-        content = orm.content
+        content = getattr(orm, "content", None)
         if not content and orm.storage_path and orm.storage_path.startswith("inline:"):
             content = orm.storage_path[len("inline:") :]
             if content == f"summary_{level_str}":  # Backwards compatibility
@@ -48,7 +48,7 @@ class OutputDeserializer:
         """Parse an OutputORM record into a DiagramOutput."""
         level_str = orm.output_type.replace("diagram_", "")
         svg_path = orm.storage_path
-        dsl_code = orm.content or "DSL Code Omitted"
+        dsl_code = getattr(orm, "content", None) or "DSL Code Omitted"
 
         # Legacy JSON format compatibility
         if orm.storage_path and orm.storage_path.startswith("json:"):

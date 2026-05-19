@@ -57,12 +57,12 @@ async def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
                 text(
                     """
                     SELECT data FROM extractions
-                    WHERE paper_id = :pid AND schema_version = :sv
+                    WHERE paper_id = CAST(:pid AS UUID) AND schema_version = :sv
                     ORDER BY extracted_at DESC
                     LIMIT 1
                     """
                 ),
-                {"pid": paper_id, "sv": _SCHEMA_VERSION},
+                {"pid": str(uuid.UUID(paper_id)), "sv": _SCHEMA_VERSION},
             )
             row = res.fetchone()
         if row:
@@ -168,7 +168,7 @@ async def extract_node(state: PipelineState) -> dict[str, Any]:
 
     try:
         # ── 1. Cache check ───────────────────────────────────────────────
-        if ctx.paper_id:
+        if ctx.settings.pipeline.cache_enabled and ctx.paper_id:
             cached = await _load_cached_extraction(ctx.paper_id)
             if cached:
                 return {

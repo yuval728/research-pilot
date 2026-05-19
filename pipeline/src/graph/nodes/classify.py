@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -149,7 +150,7 @@ async def _load_cached_classification(paper_id: str) -> ClassificationResult | N
                     LIMIT 1
                     """
                 ),
-                {"pid": paper_id},
+                {"pid": str(uuid.UUID(paper_id))},
             )
             row = res.fetchone()
 
@@ -174,11 +175,11 @@ async def _persist_classification(paper_id: str, result: ClassificationResult) -
                     """
                     UPDATE papers
                     SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:new_meta AS JSONB)
-                    WHERE id = :pid
+                    WHERE id = CAST(:pid AS UUID)
                     """
                 ),
                 {
-                    "pid": paper_id,
+                    "pid": str(uuid.UUID(paper_id)),
                     "new_meta": json.dumps(
                         {
                             "cls_domain": result.domain,
@@ -222,7 +223,7 @@ async def classify_node(state: PipelineState) -> dict[str, Any]:
 
     try:
         # ── 1. Cache check ───────────────────────────────────────────────
-        if ctx.paper_id:
+        if ctx.settings.pipeline.cache_enabled and ctx.paper_id:
             cached = await _load_cached_classification(ctx.paper_id)
             if cached:
                 return {

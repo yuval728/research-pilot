@@ -12,6 +12,8 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 const DOMAINS = ['All', 'NLP', 'Computer Vision', 'Reinforcement Learning', 'Generative'];
+const SORT_OPTIONS = ['Newest', 'Oldest', 'Title A-Z', 'Title Z-A'] as const;
+type SortOption = (typeof SORT_OPTIONS)[number];
 
 export default function LibraryPage() {
   const [papers, setPapers] = useState<Paper[]>([]);
@@ -21,9 +23,9 @@ export default function LibraryPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeDomain, setActiveDomain] = useState('All');
+  const [sortBy, setSortBy] = useState<SortOption>('Newest');
   const navigate = useNavigate();
 
-  // ── Fetch full library on mount ──────────────────────────────────────────
   useEffect(() => {
     const fetchPapers = async () => {
       try {
@@ -39,53 +41,60 @@ export default function LibraryPage() {
     fetchPapers();
   }, []);
 
-  // ── Semantic search via backend when query is long enough ────────────────
-  const handleSearch = useCallback(
-    async (query: string) => {
-      setSearchQuery(query);
+  const handleSearch = useCallback(async (query: string) => {
+    setSearchQuery(query);
 
-      if (query.trim().length <= 2) {
-        setSearchResults(null);
-        return;
-      }
+    if (query.trim().length <= 2) {
+      setSearchResults(null);
+      return;
+    }
 
-      setIsSearching(true);
-      try {
-        const results = await searchApi.searchPapers(query, 20);
-        setSearchResults(results);
-      } catch (err) {
-        console.error('Search failed:', err);
-        // Fall back to client-side filter
-        setSearchResults(null);
-      } finally {
-        setIsSearching(false);
-      }
-    },
-    [],
-  );
+    setIsSearching(true);
+    try {
+      const results = await searchApi.searchPapers(query, 20);
+      setSearchResults(results);
+    } catch (err) {
+      console.error('Search failed:', err);
+      setSearchResults(null);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
 
-  // ── Compute display list ─────────────────────────────────────────────────
-  // If we have backend search results, use those; otherwise filter locally.
   const baseList = searchResults !== null ? searchResults : papers;
 
-  const displayPapers = baseList.filter((p) => {
-    if (!p.metadata) return false;
-    if (activeDomain !== 'All') {
-      const d = p.metadata.domain?.toLowerCase() ?? '';
-      const sd = p.metadata.sub_domain?.toLowerCase() ?? '';
-      if (!d.includes(activeDomain.toLowerCase()) && !sd.includes(activeDomain.toLowerCase()))
-        return false;
-    }
-    // If we fell back to local filter (no backend results), also text-filter
-    if (searchResults === null && searchQuery.trim().length > 2) {
-      const q = searchQuery.toLowerCase();
-      return (
-        p.metadata.title.toLowerCase().includes(q) ||
-        p.metadata.authors.some((a) => a.toLowerCase().includes(q))
-      );
-    }
-    return true;
-  });
+  const displayPapers = baseList
+    .filter((p) => {
+      if (!p.metadata) return false;
+      if (activeDomain !== 'All') {
+        const selected = activeDomain.toLowerCase();
+        const d = p.metadata.domain?.toLowerCase() ?? '';
+        const sd = p.metadata.sub_domain?.toLowerCase() ?? '';
+        if (!d.includes(selected) && !sd.includes(selected)) return false;
+      }
+
+      if (searchResults === null && searchQuery.trim().length > 2) {
+        const q = searchQuery.toLowerCase();
+        return (
+          p.metadata.title.toLowerCase().includes(q) ||
+          p.metadata.authors.some((a) => a.toLowerCase().includes(q))
+        );
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      switch (sortBy) {
+        case 'Oldest':
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        case 'Title A-Z':
+          return (a.metadata?.title ?? '').localeCompare(b.metadata?.title ?? '');
+        case 'Title Z-A':
+          return (b.metadata?.title ?? '').localeCompare(a.metadata?.title ?? '');
+        case 'Newest':
+        default:
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+    });
 
   const isEmpty = !isLoading && displayPapers.length === 0;
   const latestRunByPaperId = Object.fromEntries(
@@ -95,11 +104,7 @@ export default function LibraryPage() {
   return (
     <div className="flex flex-col min-h-screen">
       <Header title="Library">
-        <Button
-          size="sm"
-          className="bg-primary hover:bg-primary/90"
-          onClick={() => navigate('/ingest')}
-        >
+        <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={() => navigate('/ingest')}>
           <Plus className="w-4 h-4 mr-2" />
           Add Paper
         </Button>
@@ -108,7 +113,7 @@ export default function LibraryPage() {
       <div className="p-8 max-w-6xl mx-auto w-full space-y-8">
         <SearchBar onSearch={handleSearch} isSearching={isSearching} />
 
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
             {DOMAINS.map((domain) => (
               <Badge
@@ -116,52 +121,58 @@ export default function LibraryPage() {
                 variant="secondary"
                 onClick={() => setActiveDomain(domain)}
                 className={cn(
-                  'px-4 py-1.5 cursor-pointer transition-colors border-[#1a1a1a]',
+                  'px-4 py-1.5 cursor-pointer transition-colors border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70',
                   activeDomain === domain
                     ? 'bg-primary text-white border-primary'
-                    : 'bg-secondary/50 text-muted-foreground hover:bg-secondary',
+                    : 'bg-secondary/70 text-foreground/80 hover:bg-secondary hover:text-foreground',
                 )}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setActiveDomain(domain);
+                  }
+                }}
               >
                 {domain}
               </Badge>
             ))}
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-[#1a1a1a] text-muted-foreground"
-          >
-            <Filter className="w-3.5 h-3.5 mr-2" />
-            Sort: Newest
-          </Button>
+
+          <div className="relative">
+            <Filter className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortOption)}
+              className="h-9 rounded-md border border-border bg-card pl-9 pr-8 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
+              aria-label="Sort papers"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  Sort: {option}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {[1, 2, 3, 4].map((i) => (
-              <div
-                key={i}
-                className="h-48 bg-secondary/30 rounded-xl animate-pulse border border-[#1a1a1a]"
-              />
+              <div key={i} className="h-48 bg-secondary/30 rounded-xl animate-pulse border border-border" />
             ))}
           </div>
         ) : isSearching ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {[1, 2].map((i) => (
-              <div
-                key={i}
-                className="h-48 bg-secondary/30 rounded-xl animate-pulse border border-[#1a1a1a]"
-              />
+              <div key={i} className="h-48 bg-secondary/30 rounded-xl animate-pulse border border-border" />
             ))}
           </div>
         ) : !isEmpty ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {displayPapers.map((paper) => (
-              <PaperCard
-                key={paper.id}
-                paper={paper}
-                pipelineRun={latestRunByPaperId[paper.id] ?? null}
-              />
+              <PaperCard key={paper.id} paper={paper} pipelineRun={latestRunByPaperId[paper.id] ?? null} />
             ))}
           </div>
         ) : (

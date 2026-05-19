@@ -39,9 +39,6 @@ export function Sidebar() {
         </div>
         <div className="flex flex-col">
           <span className="font-semibold text-sm tracking-tight">Research Pilot</span>
-          <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full w-fit font-medium">
-            BETA
-          </span>
         </div>
       </div>
 

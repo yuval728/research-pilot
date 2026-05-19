@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from src.api.dependencies import CurrentUserDep, PaperServiceDep
+from src.core.exceptions import EmbeddingError
 from src.models.paper import Paper
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -65,6 +66,9 @@ async def search_papers(
     """Return the *limit* most semantically similar papers to *query*."""
     try:
         return await paper_service.search_papers(body.query, limit=body.limit)
+    except EmbeddingError:
+        # Let global ResearchPilotError handler format a structured response.
+        raise
     except Exception as exc:  # noqa: BLE001
         structlog.get_logger(__name__).exception("search_failed", error=str(exc))
         raise HTTPException(
@@ -115,6 +119,8 @@ async def similar_papers(
 
     try:
         candidates = await paper_service.search_papers(query, limit=limit + 1)
+    except EmbeddingError:
+        raise
     except Exception as exc:  # noqa: BLE001
         structlog.get_logger(__name__).exception(
             "similarity_search_failed", error=str(exc)
