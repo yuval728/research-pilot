@@ -97,6 +97,23 @@ class Paper(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC timestamp of the last update.",
     )
+    # Hybrid sharing fields
+    user_id: uuid.UUID | None = Field(
+        None,
+        description="Owner's auth user ID. Null for anonymous / legacy records.",
+    )
+    is_public: bool = Field(
+        False,
+        description="Whether this paper is visible to all authenticated users.",
+    )
+    published_at: datetime | None = Field(
+        None,
+        description="UTC timestamp when the paper was made public. Null if private.",
+    )
+    imported_from_paper_id: uuid.UUID | None = Field(
+        None,
+        description="Source public paper id if this record was imported.",
+    )
 
 
 class PaperListItem(BaseModel):

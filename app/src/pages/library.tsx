@@ -131,6 +131,13 @@ export default function LibraryPage() {
     paperItems.map((item) => [item.paper.id, item.latest_run]),
   );
 
+  const handlePublish = (updated: Paper) => {
+    setPapers((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    setPaperItems((prev) =>
+      prev.map((item) => (item.paper.id === updated.id ? { ...item, paper: updated } : item)),
+    );
+  };
+
   return (
     <div className="flex flex-col min-h-screen">
       <Header title="Library">
@@ -208,7 +215,12 @@ export default function LibraryPage() {
         ) : !isEmpty ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {displayPapers.map((paper) => (
-              <PaperCard key={paper.id} paper={paper} pipelineRun={latestRunByPaperId[paper.id] ?? null} />
+              <PaperCard
+                key={paper.id}
+                paper={paper}
+                pipelineRun={latestRunByPaperId[paper.id] ?? null}
+                onPublish={handlePublish}
+              />
             ))}
           </div>
         ) : (

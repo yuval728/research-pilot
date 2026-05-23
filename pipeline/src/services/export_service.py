@@ -7,14 +7,14 @@ Retrieves generated assets from Supabase Storage and DB.
 import uuid
 
 import anyio
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import Client  # type: ignore[import-untyped]
 
 from src.core.config import get_settings
 from src.core.exceptions import StorageFileNotFoundError, StorageError
 from src.db.engine import get_supabase_client
-from src.db.models import ExtractionORM, OutputORM
+from src.db.models import ExtractionORM, OutputORM, PaperORM
 from src.domains.ai_ml.schema import AiMlExtraction
 from src.models.output import (
     CodeOutput,
@@ -61,46 +61,91 @@ class ExportService:
 
         return await anyio.to_thread.run_sync(_download)
 
-    async def _get_output_path(self, paper_id: uuid.UUID, output_type: str) -> str:
-        """Helper to get the storage path from DB."""
+    async def _get_output_path(
+        self,
+        paper_id: uuid.UUID,
+        output_type: str,
+        user_id: str | uuid.UUID | None = None,
+    ) -> str:
+        """Helper to get the storage path from DB, enforcing access."""
         stmt = (
             select(OutputORM.storage_path)
+            .join(PaperORM, OutputORM.paper_id == PaperORM.id)
             .where(OutputORM.paper_id == paper_id)
             .where(OutputORM.output_type == output_type)
         )
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(
+                or_(PaperORM.user_id == parsed_user_id, PaperORM.is_public)
+            )
+        else:
+            stmt = stmt.where(PaperORM.is_public)
+
         res = await self.db.execute(stmt)
         path = res.scalar_one_or_none()
         if not path:
-            raise ValueError(f"No {output_type} found for paper {paper_id}")
+            raise ValueError(
+                f"No {output_type} found for paper {paper_id} or access denied"
+            )
         return path
 
-    async def get_report_markdown(self, paper_id: uuid.UUID) -> str:
+    async def get_report_markdown(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> str:
         """Fetches markdown report from Supabase Storage."""
-        path = await self._get_output_path(paper_id, "report")
+        path = await self._get_output_path(paper_id, "report", user_id=user_id)
         data = await self._download_file(path)
         return data.decode("utf-8")
 
     async def get_diagram_svg(
-        self, paper_id: uuid.UUID, diagram_type: DiagramType
+        self,
+        paper_id: uuid.UUID,
+        diagram_type: DiagramType,
+        user_id: str | uuid.UUID | None = None,
     ) -> str:
         """Fetches SVG from storage."""
-        path = await self._get_output_path(paper_id, f"diagram_{diagram_type.value}")
+        path = await self._get_output_path(
+            paper_id, f"diagram_{diagram_type.value}", user_id=user_id
+        )
         data = await self._download_file(path)
         return data.decode("utf-8")
 
-    async def get_code_file(self, paper_id: uuid.UUID) -> bytes:
+    async def get_code_file(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> bytes:
         """Fetches .py file."""
-        path = await self._get_output_path(paper_id, "code_python")
+        path = await self._get_output_path(paper_id, "code_python", user_id=user_id)
         return await self._download_file(path)
 
-    async def get_notebook(self, paper_id: uuid.UUID) -> bytes:
+    async def get_notebook(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> bytes:
         """Fetches .ipynb file."""
-        path = await self._get_output_path(paper_id, "code_notebook")
+        path = await self._get_output_path(paper_id, "code_notebook", user_id=user_id)
         return await self._download_file(path)
 
-    async def get_output_bundle(self, paper_id: uuid.UUID) -> OutputBundle:
+    async def get_output_bundle(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> OutputBundle:
         """Assembles all outputs into one response."""
-        stmt = select(OutputORM).where(OutputORM.paper_id == paper_id)
+        stmt = (
+            select(OutputORM)
+            .join(PaperORM, OutputORM.paper_id == PaperORM.id)
+            .where(OutputORM.paper_id == paper_id)
+        )
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(
+                or_(PaperORM.user_id == parsed_user_id, PaperORM.is_public)
+            )
+        else:
+            stmt = stmt.where(PaperORM.is_public)
+
         res = await self.db.execute(stmt)
         orms = res.scalars().all()
 

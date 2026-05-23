@@ -9,10 +9,10 @@ import uuid
 from datetime import datetime, timezone
 
 import anyio
-import arxiv  # type: ignore[import-untyped]
+import arxiv
 import httpx
 from litellm import aembedding
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from supabase import Client
@@ -21,7 +21,7 @@ from src.core.config import get_settings
 from src.core.exceptions import EmbeddingError, FileUploadError
 from src.core.logger import get_logger
 from src.db.engine import get_supabase_client
-from src.db.models import EmbeddingORM, PaperORM
+from src.db.models import EmbeddingORM, PaperORM, OutputORM, ExtractionORM
 from src.db.models import PipelineRunORM
 from src.models.paper import Paper, PaperListItem, PaperMetadata, PaperSource
 from src.models.run import PipelineRun, StageResult
@@ -64,6 +64,12 @@ class PaperService:
             metadata=PaperMetadata(**metadata_dict) if metadata_dict else None,
             created_at=orm.created_at.replace(tzinfo=timezone.utc),
             updated_at=orm.updated_at.replace(tzinfo=timezone.utc),
+            user_id=orm.user_id,
+            is_public=bool(orm.is_public),
+            published_at=orm.published_at.replace(tzinfo=timezone.utc)
+            if orm.published_at
+            else None,
+            imported_from_paper_id=orm.imported_from_paper_id,
         )
 
     def _to_stage_pydantic(self, orm) -> StageResult:
@@ -80,15 +86,22 @@ class PaperService:
         metadata: PaperMetadata | None = None,
         identifier_type: str | None = None,
         identifier_value: str | None = None,
+        user_id: str | uuid.UUID | None = None,
     ) -> Paper:
         """Core ingest logic: creates the DB record."""
         paper_id = uuid.uuid4()
+        parsed_user_id = None
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
         orm = PaperORM(
             id=paper_id,
             source=source.value,
             source_url=source_url,
             pdf_storage_path=pdf_storage_path,
             metadata_=metadata.model_dump() if metadata else None,
+            user_id=parsed_user_id,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
@@ -112,7 +125,9 @@ class PaperService:
         res = await self.db.execute(stmt)
         return res.scalars().first()
 
-    async def create_from_upload(self, file_bytes: bytes, filename: str) -> Paper:
+    async def create_from_upload(
+        self, file_bytes: bytes, filename: str, user_id: str | uuid.UUID | None = None
+    ) -> Paper:
         """Validates file is PDF, uploads to Supabase, and inserts Paper."""
         if not filename.lower().endswith(".pdf"):
             raise ValueError("File must be a PDF")
@@ -142,9 +157,12 @@ class PaperService:
         return await self._ingest(
             source=PaperSource.PDF_UPLOAD,
             pdf_storage_path=storage_path,
+            user_id=user_id,
         )
 
-    async def create_from_arxiv(self, arxiv_url: str) -> Paper:
+    async def create_from_arxiv(
+        self, arxiv_url: str, user_id: str | uuid.UUID | None = None
+    ) -> Paper:
         """Fetches metadata from arXiv API, and runs ingest."""
         match = re.search(r"arxiv\.org/(?:abs|pdf)/(\d+\.\d+(?:v\d+)?)", arxiv_url)
         if not match:
@@ -197,9 +215,12 @@ class PaperService:
             metadata=metadata,
             identifier_type="arxiv_id",
             identifier_value=arxiv_id,
+            user_id=user_id,
         )
 
-    async def create_from_doi(self, doi: str) -> Paper:
+    async def create_from_doi(
+        self, doi: str, user_id: str | uuid.UUID | None = None
+    ) -> Paper:
         """Resolves via CrossRef, and runs ingest."""
         normalized_doi = doi.strip().lower()
         existing = await self._find_existing_by_metadata_identifier(
@@ -256,19 +277,40 @@ class PaperService:
             metadata=metadata,
             identifier_type="doi",
             identifier_value=normalized_doi,
+            user_id=user_id,
         )
 
-    async def get_paper(self, paper_id: uuid.UUID) -> Paper:
-        """Fetch a specific paper by ID."""
-        orm = await self.db.get(PaperORM, paper_id)
+    async def get_paper(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> Paper:
+        """Fetch a specific paper by ID, enforcing privacy."""
+        stmt = select(PaperORM).where(PaperORM.id == paper_id)
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(
+                or_(
+                    PaperORM.user_id == parsed_user_id,
+                    PaperORM.is_public,
+                )
+            )
+        else:
+            stmt = stmt.where(PaperORM.is_public)
+
+        res = await self.db.execute(stmt)
+        orm = res.scalars().first()
         if not orm:
-            raise ValueError(f"Paper {paper_id} not found")
+            raise ValueError(f"Paper {paper_id} not found or access denied")
         return self._to_pydantic(orm)
 
     async def list_papers(
-        self, filters: dict[str, str] | None = None
+        self,
+        filters: dict[str, str] | None = None,
+        user_id: str | uuid.UUID | None = None,
+        include_public: bool = False,
     ) -> list[PaperListItem]:
-        """List papers with optional filters and attach latest run."""
+        """List papers with optional filters and attach latest run, enforcing privacy."""
         stmt = select(PaperORM).options(
             selectinload(PaperORM.runs).selectinload(PipelineRunORM.stages)
         )
@@ -276,7 +318,21 @@ class PaperService:
         if filters:
             if "source" in filters:
                 stmt = stmt.where(PaperORM.source == filters["source"])
-            # Additional filters can be applied here
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            if include_public:
+                stmt = stmt.where(
+                    or_(
+                        PaperORM.user_id == parsed_user_id,
+                        PaperORM.is_public,
+                    )
+                )
+            else:
+                stmt = stmt.where(PaperORM.user_id == parsed_user_id)
+        else:
+            stmt = stmt.where(PaperORM.is_public)
 
         result = await self.db.execute(stmt)
         orms = result.scalars().all()
@@ -296,8 +352,10 @@ class PaperService:
 
         return items
 
-    async def search_papers(self, query: str, limit: int = 5) -> list[Paper]:
-        """Queries pgvector similarity search using LiteLLM."""
+    async def search_papers(
+        self, query: str, limit: int = 5, user_id: str | uuid.UUID | None = None
+    ) -> list[Paper]:
+        """Queries pgvector similarity search using LiteLLM, enforcing privacy."""
         try:
             res = await aembedding(
                 model=settings.gemini.embedding_model,
@@ -336,22 +394,42 @@ class PaperService:
             .subquery()
         )
 
-        stmt = (
-            select(PaperORM)
-            .join(distance_subq, PaperORM.id == distance_subq.c.paper_id)
-            .order_by(distance_subq.c.best_distance)
-            .limit(limit)
+        stmt = select(PaperORM).join(
+            distance_subq, PaperORM.id == distance_subq.c.paper_id
         )
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(
+                or_(
+                    PaperORM.user_id == parsed_user_id,
+                    PaperORM.is_public,
+                )
+            )
+        else:
+            stmt = stmt.where(PaperORM.is_public)
+
+        stmt = stmt.order_by(distance_subq.c.best_distance).limit(limit)
         result = await self.db.execute(stmt)
         orms = result.scalars().all()
         return [self._to_pydantic(orm) for orm in orms]
 
-    async def delete_paper(self, paper_id: uuid.UUID) -> None:
-        """Deletes DB records and Supabase Storage files."""
-        # Lookup first to find the file path
-        orm = await self.db.get(PaperORM, paper_id)
+    async def delete_paper(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> None:
+        """Deletes DB records and Supabase Storage files, enforcing ownership."""
+        stmt = select(PaperORM).where(PaperORM.id == paper_id)
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(PaperORM.user_id == parsed_user_id)
+
+        res = await self.db.execute(stmt)
+        orm = res.scalars().first()
         if not orm:
-            return  # Already gone
+            return  # Already gone or access denied
 
         pdf_path = orm.pdf_storage_path
 
@@ -374,7 +452,118 @@ class PaperService:
                 pass
 
         await anyio.to_thread.run_sync(_delete_files)
-
-        # Delete cascade should handle other ORMs via cascade="all, delete-orphan"
         await self.db.delete(orm)
         await self.db.commit()
+
+    async def publish_paper(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> Paper:
+        """Publishes a paper so others can see and import it."""
+        stmt = select(PaperORM).where(PaperORM.id == paper_id)
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(PaperORM.user_id == parsed_user_id)
+
+        res = await self.db.execute(stmt)
+        orm = res.scalars().first()
+        if not orm:
+            raise ValueError(f"Paper {paper_id} not found or access denied")
+
+        orm.is_public = True
+        orm.published_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        await self.db.refresh(orm)
+        return self._to_pydantic(orm)
+
+    async def import_paper(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> Paper:
+        """Imports a public paper into the user's private library."""
+        if not user_id:
+            raise ValueError("Must be logged in to import a paper")
+
+        parsed_user_id = (
+            uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+        )
+
+        # 1. Return existing import if this user already imported the same public paper.
+        existing_stmt = select(PaperORM).where(
+            PaperORM.user_id == parsed_user_id,
+            PaperORM.imported_from_paper_id == paper_id,
+        )
+        existing_res = await self.db.execute(existing_stmt)
+        existing_import = existing_res.scalars().first()
+        if existing_import:
+            return self._to_pydantic(existing_import)
+
+        # 2. Fetch the source paper (must be public)
+        stmt = (
+            select(PaperORM)
+            .options(
+                selectinload(PaperORM.outputs),
+                selectinload(PaperORM.extractions),
+                selectinload(PaperORM.embeddings),
+            )
+            .where(PaperORM.id == paper_id, PaperORM.is_public)
+        )
+
+        res = await self.db.execute(stmt)
+        src_orm = res.scalars().first()
+        if not src_orm:
+            raise ValueError(f"Public paper {paper_id} not found")
+
+        # 3. Duplicate the paper
+        new_paper_id = uuid.uuid4()
+        new_orm = PaperORM(
+            id=new_paper_id,
+            source=src_orm.source,
+            source_url=src_orm.source_url,
+            pdf_storage_path=src_orm.pdf_storage_path,  # Share the same PDF file
+            metadata_=dict(src_orm.metadata_) if src_orm.metadata_ else None,
+            user_id=parsed_user_id,
+            is_public=False,
+            imported_from_paper_id=src_orm.id,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        self.db.add(new_orm)
+
+        # 4. Duplicate outputs (just DB rows referencing the same storage paths)
+        for out in getattr(src_orm, "outputs", []):
+            new_out = OutputORM(
+                id=uuid.uuid4(),
+                paper_id=new_paper_id,
+                output_type=out.output_type,
+                storage_path=out.storage_path,
+                created_at=datetime.now(timezone.utc),
+            )
+            self.db.add(new_out)
+
+        # 5. Duplicate extractions
+        for ext in getattr(src_orm, "extractions", []):
+            new_ext = ExtractionORM(
+                id=uuid.uuid4(),
+                paper_id=new_paper_id,
+                domain=ext.domain,
+                schema_version=ext.schema_version,
+                data=dict(ext.data),
+                extracted_at=datetime.now(timezone.utc),
+            )
+            self.db.add(new_ext)
+
+        # 6. Duplicate embeddings
+        for emb in getattr(src_orm, "embeddings", []):
+            new_emb = EmbeddingORM(
+                id=uuid.uuid4(),
+                paper_id=new_paper_id,
+                chunk_type=emb.chunk_type,
+                embedding=emb.embedding,
+                created_at=datetime.now(timezone.utc),
+            )
+            self.db.add(new_emb)
+
+        await self.db.commit()
+        await self.db.refresh(new_orm)
+        return self._to_pydantic(new_orm)

@@ -20,6 +20,14 @@ export const papersApi = {
     return apiFetch(`/api/v1/papers/${id}`);
   },
 
+  async listPublicPapers(filters?: Record<string, string>): Promise<PaperListItem[]> {
+    ensureApi();
+    const params = filters
+      ? '?' + new URLSearchParams(filters).toString()
+      : '';
+    return apiFetch(`/api/v1/papers/public${params}`);
+  },
+
   async uploadPaper(file: File): Promise<Paper> {
     ensureApi();
     const token = (await getAccessToken()) ?? null;
@@ -53,6 +61,16 @@ export const papersApi = {
   async deletePaper(id: string): Promise<void> {
     ensureApi();
     await apiFetch(`/api/v1/papers/${id}`, { method: 'DELETE' });
+  },
+
+  async publishPaper(id: string): Promise<Paper> {
+    ensureApi();
+    return apiFetch(`/api/v1/papers/${id}/publish`, { method: 'POST' });
+  },
+
+  async importPaper(id: string): Promise<Paper> {
+    ensureApi();
+    return apiFetch(`/api/v1/papers/${id}/import`, { method: 'POST' });
   },
 
   async getOutputBundle(id: string): Promise<OutputBundle> {

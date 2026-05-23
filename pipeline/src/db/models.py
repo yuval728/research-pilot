@@ -39,6 +39,15 @@ class PaperORM(Base):
         "metadata", JSONB, nullable=True
     )
 
+    user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    is_public: Mapped[bool] = mapped_column(default=False, server_default="false")
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    imported_from_paper_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("papers.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

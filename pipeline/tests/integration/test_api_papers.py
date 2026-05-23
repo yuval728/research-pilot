@@ -43,6 +43,10 @@ def test_list_papers(test_client: TestClient):
         source_url="https://arxiv.org/abs/1234.56789",  # type: ignore[arg-type]
         pdf_storage_path="mock/path.pdf",
         metadata=None,
+        user_id=None,
+        is_public=False,
+        published_at=None,
+        imported_from_paper_id=None,
     )
 
     with patch(
@@ -66,6 +70,10 @@ def test_get_paper_success(test_client: TestClient):
         source_url="https://doi.org/10.1234/test",  # type: ignore[arg-type]
         pdf_storage_path="mock/path.pdf",
         metadata=None,
+        user_id=None,
+        is_public=False,
+        published_at=None,
+        imported_from_paper_id=None,
     )
 
     with patch(
@@ -101,6 +109,10 @@ def test_upload_paper_pdf(test_client: TestClient, pdf_bytes: bytes):
         source_url=None,
         pdf_storage_path=f"papers/{paper_id}_test.pdf",
         metadata=None,
+        user_id=None,
+        is_public=False,
+        published_at=None,
+        imported_from_paper_id=None,
     )
 
     with patch(

@@ -37,7 +37,7 @@ async def trigger_run(
 ) -> PipelineRun:
     """Start the LangGraph pipeline for *paper_id* in the background."""
     try:
-        return await pipeline_service.trigger_run(paper_id)
+        return await pipeline_service.trigger_run(paper_id, user_id=_user)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -57,7 +57,7 @@ async def get_run_status(
 ) -> PipelineRun:
     """Fetch the current status and all stage results for a run."""
     try:
-        return await pipeline_service.get_run_status(run_id)
+        return await pipeline_service.get_run_status(run_id, user_id=_user)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -75,7 +75,7 @@ async def get_latest_run_for_paper(
     pipeline_service: PipelineServiceDep,
     _user: CurrentUserDep,
 ) -> PipelineRun | None:
-    return await pipeline_service.get_latest_run_for_paper(paper_id)
+    return await pipeline_service.get_latest_run_for_paper(paper_id, user_id=_user)
 
 
 @router.post(
@@ -95,7 +95,7 @@ async def retry_stage(
 ) -> dict[str, str]:
     """Reset *stage_name* to PENDING and re-trigger pipeline execution."""
     try:
-        await pipeline_service.retry_stage(run_id, stage_name)
+        await pipeline_service.retry_stage(run_id, stage_name, user_id=_user)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -117,7 +117,9 @@ async def get_stage_result(
 ) -> StageResult:
     """Fetch the result record for *stage_name* within *run_id*."""
     try:
-        return await pipeline_service.get_stage_result(run_id, stage_name)
+        return await pipeline_service.get_stage_result(
+            run_id, stage_name, user_id=_user
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -142,7 +144,7 @@ async def stream_run_status(
         try:
             while True:
                 try:
-                    run = await pipeline_service.get_run_status(run_id)
+                    run = await pipeline_service.get_run_status(run_id, user_id=_user)
                     error_count = 0  # Reset on success
                     payload = {
                         "id": str(run.id),

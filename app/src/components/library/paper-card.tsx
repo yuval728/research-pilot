@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ChevronRight, Code2, FileText, GitBranch } from 'lucide-react';
+import { ChevronRight, Code2, FileText, GitBranch, Globe, Lock, Upload } from 'lucide-react';
 import { Paper, PipelineRun } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,18 +8,39 @@ import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
 import { toDisplayStatus } from '@/lib/pipeline-status';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/lib/utils/format';
+import { papersApi } from '@/lib/api/papers';
 
 interface PaperCardProps {
   paper: Paper;
   pipelineRun?: PipelineRun | null;
+  /** Called with the updated Paper after a successful publish. */
+  onPublish?: (updated: Paper) => void;
 }
 
 type DisplayStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
 
-export function PaperCard({ paper, pipelineRun }: PaperCardProps) {
+export function PaperCard({ paper, pipelineRun, onPublish }: PaperCardProps) {
   const navigate = useNavigate();
   const status = toDisplayStatus(pipelineRun);
   const meta = paper.metadata;
+  const [isPublishing, setIsPublishing] = useState(false);
+
+  const handlePublish = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (isPublishing) return;
+    setIsPublishing(true);
+    try {
+      const updated = await papersApi.publishPaper(paper.id);
+      onPublish?.(updated);
+    } catch (err) {
+      console.error('Failed to publish paper:', err);
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const canPublish = !paper.is_public && status === 'COMPLETED' && !!onPublish;
 
   return (
     <Card className="bg-card border-border hover:border-primary/60 transition-all group overflow-hidden">
@@ -42,7 +64,10 @@ export function PaperCard({ paper, pipelineRun }: PaperCardProps) {
               </Badge>
             )}
           </div>
-          <StatusBadge status={status} />
+          <div className="flex items-center gap-2">
+            <VisibilityBadge isPublic={paper.is_public} />
+            <StatusBadge status={status} />
+          </div>
         </div>
         <h3 className="text-base font-semibold leading-tight line-clamp-2 group-hover:text-primary transition-colors">
           {meta?.title ?? 'Untitled Paper'}
@@ -76,34 +101,50 @@ export function PaperCard({ paper, pipelineRun }: PaperCardProps) {
             AWAITING PIPELINE
           </div>
         ) : (
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/70"
-              title="View diagrams"
-              onClick={() => navigate(`/papers/${paper.id}?tab=diagrams`)}
-            >
-              <GitBranch className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/70"
-              title="View code"
-              onClick={() => navigate(`/papers/${paper.id}?tab=code`)}
-            >
-              <Code2 className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/70"
-              title="View report"
-              onClick={() => navigate(`/papers/${paper.id}?tab=report`)}
-            >
-              <FileText className="w-4 h-4" />
-            </Button>
+          <div className="flex items-center justify-between gap-1">
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/70"
+                title="View diagrams"
+                onClick={() => navigate(`/papers/${paper.id}?tab=diagrams`)}
+              >
+                <GitBranch className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/70"
+                title="View code"
+                onClick={() => navigate(`/papers/${paper.id}?tab=code`)}
+              >
+                <Code2 className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/70"
+                title="View report"
+                onClick={() => navigate(`/papers/${paper.id}?tab=report`)}
+              >
+                <FileText className="w-4 h-4" />
+              </Button>
+            </div>
+
+            {canPublish && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isPublishing}
+                onClick={handlePublish}
+                className="h-7 text-[10px] font-bold uppercase tracking-wider gap-1.5 border-primary/40 text-primary hover:bg-primary/10 hover:border-primary transition-colors"
+                title="Make this paper visible to everyone"
+              >
+                <Upload className={cn('w-3 h-3', isPublishing && 'animate-pulse')} />
+                {isPublishing ? 'Publishing…' : 'Publish'}
+              </Button>
+            )}
           </div>
         )}
       </CardContent>
@@ -118,6 +159,27 @@ export function PaperCard({ paper, pipelineRun }: PaperCardProps) {
         </Link>
       </CardFooter>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function VisibilityBadge({ isPublic }: { isPublic: boolean }) {
+  return (
+    <div
+      title={isPublic ? 'Public — visible to all users' : 'Private — only you can see this'}
+      className={cn(
+        'flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-tighter transition-colors',
+        isPublic
+          ? 'bg-emerald-500/10 text-emerald-500'
+          : 'bg-muted/60 text-muted-foreground',
+      )}
+    >
+      {isPublic ? <Globe className="w-2.5 h-2.5" /> : <Lock className="w-2.5 h-2.5" />}
+      {isPublic ? 'Public' : 'Private'}
+    </div>
   );
 }
 

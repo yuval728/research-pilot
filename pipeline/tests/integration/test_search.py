@@ -25,6 +25,10 @@ def test_search_papers(test_client: TestClient):
         source_url="https://arxiv.org/abs/1234.56789",  # type: ignore[arg-type]
         pdf_storage_path="mock/path.pdf",
         metadata=None,
+        user_id=None,
+        is_public=False,
+        published_at=None,
+        imported_from_paper_id=None,
     )
 
     with patch(

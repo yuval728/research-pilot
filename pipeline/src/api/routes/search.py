@@ -65,7 +65,9 @@ async def search_papers(
 ) -> list[Paper]:
     """Return the *limit* most semantically similar papers to *query*."""
     try:
-        return await paper_service.search_papers(body.query, limit=body.limit)
+        return await paper_service.search_papers(
+            body.query, limit=body.limit, user_id=_user
+        )
     except EmbeddingError:
         # Let global ResearchPilotError handler format a structured response.
         raise
@@ -95,7 +97,7 @@ async def similar_papers(
     """Return papers most similar to *paper_id* using its stored embeddings."""
     # Fetch the paper first to derive a search query from its title+abstract
     try:
-        paper = await paper_service.get_paper(paper_id)
+        paper = await paper_service.get_paper(paper_id, user_id=_user)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -118,7 +120,9 @@ async def similar_papers(
     query = " ".join(query_parts)
 
     try:
-        candidates = await paper_service.search_papers(query, limit=limit + 1)
+        candidates = await paper_service.search_papers(
+            query, limit=limit + 1, user_id=_user
+        )
     except EmbeddingError:
         raise
     except Exception as exc:  # noqa: BLE001

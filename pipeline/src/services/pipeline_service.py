@@ -189,11 +189,25 @@ class PipelineService:
                     await session.commit()
             raise
 
-    async def trigger_run(self, paper_id: uuid.UUID) -> PipelineRun:
+    async def trigger_run(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> PipelineRun:
         """Sets up a new PipelineRunORM and invokes the LangGraph research pipeline in background."""
-        paper_orm = await self.db.get(PaperORM, paper_id)
+        stmt = select(PaperORM).where(PaperORM.id == paper_id)
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(
+                PaperORM.user_id == parsed_user_id
+            )  # Must own the paper to run pipeline
+
+        res = await self.db.execute(stmt)
+        paper_orm = res.scalars().first()
         if not paper_orm:
-            raise ValueError(f"Paper {paper_id} not found")
+            raise ValueError(
+                f"Paper {paper_id} not found or you don't have permission to modify it"
+            )
 
         run_id = uuid.uuid4()
         run_orm = PipelineRunORM(
@@ -245,51 +259,118 @@ class PipelineService:
                 error_type=type(exc).__name__,
             )
 
-    async def get_run_status(self, run_id: uuid.UUID) -> PipelineRun:
+    async def get_run_status(
+        self, run_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> PipelineRun:
         """Fetches a run configuration and all stage outcomes."""
         stmt = (
             select(PipelineRunORM)
+            .join(PaperORM, PipelineRunORM.paper_id == PaperORM.id)
             .where(PipelineRunORM.id == run_id)
             .options(selectinload(PipelineRunORM.stages))
         )
+        if user_id:
+            from sqlalchemy import or_
+
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(
+                or_(PaperORM.user_id == parsed_user_id, PaperORM.is_public)
+            )
+        else:
+            stmt = stmt.where(PaperORM.is_public)
+
         res = await self.db.execute(stmt)
         orm = res.scalar_one_or_none()
         if not orm:
-            raise ValueError(f"PipelineRun {run_id} not found")
+            raise ValueError(f"PipelineRun {run_id} not found or access denied")
         return self._to_run_pydantic(orm)
 
-    async def get_latest_run_for_paper(self, paper_id: uuid.UUID) -> PipelineRun | None:
+    async def get_latest_run_for_paper(
+        self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
+    ) -> PipelineRun | None:
         stmt = (
             select(PipelineRunORM)
+            .join(PaperORM, PipelineRunORM.paper_id == PaperORM.id)
             .where(PipelineRunORM.paper_id == paper_id)
             .order_by(desc(PipelineRunORM.created_at))
             .options(selectinload(PipelineRunORM.stages))
             .limit(1)
         )
+        if user_id:
+            from sqlalchemy import or_
+
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(
+                or_(PaperORM.user_id == parsed_user_id, PaperORM.is_public)
+            )
+        else:
+            stmt = stmt.where(PaperORM.is_public)
+
         res = await self.db.execute(stmt)
         orm = res.scalar_one_or_none()
         if orm is None:
             return None
         return self._to_run_pydantic(orm)
 
-    async def get_stage_result(self, run_id: uuid.UUID, stage_name: str) -> StageResult:
+    async def get_stage_result(
+        self, run_id: uuid.UUID, stage_name: str, user_id: str | uuid.UUID | None = None
+    ) -> StageResult:
         """Outputs specific stage configuration result."""
         stmt = (
             select(StageResultORM)
+            .join(PipelineRunORM, StageResultORM.run_id == PipelineRunORM.id)
+            .join(PaperORM, PipelineRunORM.paper_id == PaperORM.id)
             .where(StageResultORM.run_id == run_id)
             .where(StageResultORM.stage_name == stage_name)
         )
+        if user_id:
+            from sqlalchemy import or_
+
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            stmt = stmt.where(
+                or_(PaperORM.user_id == parsed_user_id, PaperORM.is_public)
+            )
+        else:
+            stmt = stmt.where(PaperORM.is_public)
+
         res = await self.db.execute(stmt)
         orm = res.scalar_one_or_none()
         if not orm:
-            raise ValueError(f"Stage {stage_name} not found for run {run_id}")
+            raise ValueError(
+                f"Stage {stage_name} not found for run {run_id} or access denied"
+            )
         return self._to_stage_pydantic(orm)
 
-    async def retry_stage(self, run_id: uuid.UUID, stage_name: str) -> None:
+    async def retry_stage(
+        self, run_id: uuid.UUID, stage_name: str, user_id: str | uuid.UUID | None = None
+    ) -> None:
         """Manually wipes cached state for a given stage and triggers pipeline re-run."""
-        # We need the base pipeline state
-        # Usually from graph checkpointer or reconstructing from the DB context.
-        # We will assume graph reads from StageResultORM locally and caching logic dictates resume
+        # Check permissions first via PipelineRun
+        run_stmt = (
+            select(PipelineRunORM)
+            .join(PaperORM, PipelineRunORM.paper_id == PaperORM.id)
+            .where(PipelineRunORM.id == run_id)
+        )
+        if user_id:
+            parsed_user_id = (
+                uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
+            )
+            run_stmt = run_stmt.where(
+                PaperORM.user_id == parsed_user_id
+            )  # Must own the paper to run pipeline
+
+        run_res = await self.db.execute(run_stmt)
+        run_orm = run_res.scalar_one_or_none()
+        if not run_orm:
+            raise ValueError(
+                f"PipelineRun {run_id} not found or you don't have permission to modify it"
+            )
 
         stmt = (
             select(StageResultORM)
@@ -306,12 +387,6 @@ class PipelineService:
             stage_orm.cached = False
             stage_orm.token_count = 0
             await self.db.commit()
-
-        run_orm_stmt = select(PipelineRunORM).where(PipelineRunORM.id == run_id)
-        run_res = await self.db.execute(run_orm_stmt)
-        run_orm = run_res.scalar_one_or_none()
-        if not run_orm:
-            raise ValueError(f"PipelineRun {run_id} not found")
 
         paper_orm = await self.db.get(PaperORM, run_orm.paper_id)
         if not paper_orm:

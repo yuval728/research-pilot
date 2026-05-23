@@ -104,11 +104,11 @@ def test_client() -> Generator[TestClient, None, None]:
     fake_settings = _make_fake_settings()
 
     with (
-        patch("pipeline.api.main.get_settings", return_value=fake_settings),
-        patch("pipeline.api.routes.health.get_settings", return_value=fake_settings),
-        patch("pipeline.core.config.get_settings", return_value=fake_settings),
-        patch("pipeline.api.main.engine") as mock_engine,
-        patch("pipeline.api.main.domain_registry") as mock_registry,
+        patch("src.api.main.get_settings", return_value=fake_settings),
+        patch("src.api.routes.health.get_settings", return_value=fake_settings),
+        patch("src.core.config.get_settings", return_value=fake_settings),
+        patch("src.api.main.engine") as mock_engine,
+        patch("src.api.main.domain_registry") as mock_registry,
         patch("sentry_sdk.init"),
     ):
         # Make the engine's async context manager work
@@ -177,6 +177,10 @@ def sample_paper() -> Paper:
         ),
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        user_id=None,
+        is_public=False,
+        published_at=None,
+        imported_from_paper_id=None,
     )
 
 

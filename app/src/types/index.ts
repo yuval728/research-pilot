@@ -11,6 +11,11 @@ export interface Paper {
   metadata: PaperMetadata | null;
   created_at: string;
   updated_at: string;
+  // Hybrid sharing
+  user_id: string | null;
+  is_public: boolean;
+  published_at: string | null;
+  imported_from_paper_id: string | null;
 }
 
 export interface PaperListItem {
