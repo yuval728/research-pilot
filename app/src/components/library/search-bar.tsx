@@ -8,9 +8,17 @@ interface SearchBarProps {
   className?: string;
   /** Shows a spinner while semantic search is in flight */
   isSearching?: boolean;
+  placeholder?: string;
+  helperText?: string;
 }
 
-export function SearchBar({ onSearch, className, isSearching = false }: SearchBarProps) {
+export function SearchBar({
+  onSearch,
+  className,
+  isSearching = false,
+  placeholder = 'Search papers by concept, method, architecture...',
+  helperText = 'Use natural language to find relevant papers in your library.',
+}: SearchBarProps) {
   const [query, setQuery] = useState('');
 
   const handleClear = () => {
@@ -33,7 +41,7 @@ export function SearchBar({ onSearch, className, isSearching = false }: SearchBa
             setQuery(e.target.value);
             onSearch(e.target.value);
           }}
-          placeholder="Search papers by concept, method, architecture..."
+          placeholder={placeholder}
           className="h-14 border-0 bg-transparent pl-11 pr-12 text-lg text-foreground placeholder:text-muted-foreground/80 focus-visible:ring-0"
         />
 
@@ -49,7 +57,7 @@ export function SearchBar({ onSearch, className, isSearching = false }: SearchBa
       </div>
 
       <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-[0.14em]">
-        {isSearching ? 'Searching...' : 'Semantic search powered by Gemini embeddings'}
+        {isSearching ? 'Searching...' : helperText}
       </p>
     </div>
   );

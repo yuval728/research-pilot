@@ -220,13 +220,13 @@ class PipelineService:
         self.db.add(run_orm)
         await self.db.commit()
 
-        stmt = (
+        run_stmt = (
             select(PipelineRunORM)
             .where(PipelineRunORM.id == run_id)
             .options(selectinload(PipelineRunORM.stages))
         )
-        res = await self.db.execute(stmt)
-        run_orm = res.scalar_one()
+        run_res = await self.db.execute(run_stmt)
+        run_orm = run_res.scalar_one()
 
         metadata = PaperMetadata(**paper_orm.metadata_) if paper_orm.metadata_ else None
 

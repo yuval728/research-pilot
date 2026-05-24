@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { BookOpen, Plus, LogOut, User } from 'lucide-react';
+import { BookOpen, Plus, LogOut, User, Globe } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -43,6 +43,7 @@ export function Sidebar() {
 
   const navItems = [
     { name: 'Library', icon: BookOpen, path: '/library' },
+    { name: 'Explore', icon: Globe, path: '/explore' },
     { name: 'Add Paper', icon: Plus, path: '/ingest' },
   ];
 

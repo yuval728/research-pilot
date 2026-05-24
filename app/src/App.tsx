@@ -7,6 +7,7 @@ import LoginPage from '@/pages/login';
 import LibraryPage from '@/pages/library';
 import IngestPage from '@/pages/ingest';
 import PaperViewerPage from '@/pages/paper-viewer';
+import ExplorePage from '@/pages/explore';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +28,7 @@ export default function App() {
 
             <Route element={<DashboardLayout />}>
               <Route path="/library" element={<LibraryPage />} />
+              <Route path="/explore" element={<ExplorePage />} />
               <Route path="/ingest" element={<IngestPage />} />
               <Route path="/papers/:id" element={<PaperViewerPage />} />
               <Route path="/" element={<Navigate to="/library" replace />} />

@@ -513,6 +513,8 @@ class PaperService:
         src_orm = res.scalars().first()
         if not src_orm:
             raise ValueError(f"Public paper {paper_id} not found")
+        if src_orm.user_id == parsed_user_id:
+            raise ValueError("Cannot import your own paper")
 
         # 3. Duplicate the paper
         new_paper_id = uuid.uuid4()

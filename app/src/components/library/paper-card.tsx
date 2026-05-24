@@ -9,21 +9,27 @@ import { toDisplayStatus } from '@/lib/pipeline-status';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/lib/utils/format';
 import { papersApi } from '@/lib/api/papers';
+import { toast } from 'sonner';
 
 interface PaperCardProps {
   paper: Paper;
   pipelineRun?: PipelineRun | null;
   /** Called with the updated Paper after a successful publish. */
   onPublish?: (updated: Paper) => void;
+  /** Called after a successful import of a public paper. */
+  onImport?: (paperId: string) => void;
 }
 
 type DisplayStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
 
-export function PaperCard({ paper, pipelineRun, onPublish }: PaperCardProps) {
+export function PaperCard({ paper, pipelineRun, onPublish, onImport }: PaperCardProps) {
   const navigate = useNavigate();
   const status = toDisplayStatus(pipelineRun);
+  const displayStatus: DisplayStatus =
+    status === 'PENDING' && paper.imported_from_paper_id ? 'COMPLETED' : status;
   const meta = paper.metadata;
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
 
   const handlePublish = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -40,13 +46,14 @@ export function PaperCard({ paper, pipelineRun, onPublish }: PaperCardProps) {
     }
   };
 
-  const canPublish = !paper.is_public && status === 'COMPLETED' && !!onPublish;
+  const canPublish = !paper.is_public && displayStatus === 'COMPLETED' && !!onPublish;
+  const canImport = paper.is_public && !!onImport;
 
   return (
-    <Card className="bg-card border-border hover:border-primary/60 transition-all group overflow-hidden">
+    <Card className="bg-card border-border hover:border-primary/60 transition-all group overflow-hidden h-full">
       <CardHeader className="p-5 pb-3">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex gap-2 flex-wrap">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="flex gap-2 flex-wrap max-w-[70%]">
             {meta?.domain && (
               <Badge
                 variant="secondary"
@@ -64,9 +71,12 @@ export function PaperCard({ paper, pipelineRun, onPublish }: PaperCardProps) {
               </Badge>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <VisibilityBadge isPublic={paper.is_public} />
-            <StatusBadge status={status} />
+          <div className="flex items-center gap-2 shrink-0">
+            <VisibilityBadge
+              isPublic={paper.is_public}
+              isImported={Boolean(paper.imported_from_paper_id)}
+            />
+            <StatusBadge status={displayStatus} />
           </div>
         </div>
         <h3 className="text-base font-semibold leading-tight line-clamp-2 group-hover:text-primary transition-colors">
@@ -84,19 +94,19 @@ export function PaperCard({ paper, pipelineRun, onPublish }: PaperCardProps) {
         </div>
       </CardHeader>
 
-      <CardContent className="p-5 pt-0">
-        {status === 'RUNNING' ? (
+      <CardContent className="p-5 pt-0 flex-1">
+        {displayStatus === 'RUNNING' ? (
           <div className="flex items-center gap-3 py-2">
             <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
               <div className="h-full bg-primary animate-progress-indeterminate" />
             </div>
             <span className="text-[10px] font-bold text-primary animate-pulse">PROCESSING</span>
           </div>
-        ) : status === 'FAILED' ? (
+        ) : displayStatus === 'FAILED' ? (
           <div className="bg-destructive/10 text-destructive text-[10px] font-bold p-2 rounded border border-destructive/20">
             PIPELINE FAILED
           </div>
-        ) : status === 'PENDING' ? (
+        ) : displayStatus === 'PENDING' ? (
           <div className="bg-muted/30 text-muted-foreground text-[10px] font-bold p-2 rounded border border-muted/20">
             AWAITING PIPELINE
           </div>
@@ -145,6 +155,34 @@ export function PaperCard({ paper, pipelineRun, onPublish }: PaperCardProps) {
                 {isPublishing ? 'Publishing…' : 'Publish'}
               </Button>
             )}
+
+            {canImport && !canPublish && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isImporting}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  if (isImporting) return;
+                  setIsImporting(true);
+                  try {
+                    await papersApi.importPaper(paper.id);
+                    onImport?.(paper.id);
+                  } catch (err) {
+                    console.error('Failed to import paper:', err);
+                    toast.error('Failed to import paper');
+                  } finally {
+                    setIsImporting(false);
+                  }
+                }}
+                className="h-7 text-[10px] font-bold uppercase tracking-wider gap-1.5 border-primary/40 text-primary hover:bg-primary/10 hover:border-primary transition-colors"
+                title="Import this paper into your library"
+              >
+                <Upload className={cn('w-3 h-3', isImporting && 'animate-pulse')} />
+                {isImporting ? 'Importing…' : 'Import'}
+              </Button>
+            )}
           </div>
         )}
       </CardContent>
@@ -166,7 +204,25 @@ export function PaperCard({ paper, pipelineRun, onPublish }: PaperCardProps) {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function VisibilityBadge({ isPublic }: { isPublic: boolean }) {
+function VisibilityBadge({
+  isPublic,
+  isImported,
+}: {
+  isPublic: boolean;
+  isImported: boolean;
+}) {
+  if (isImported) {
+    return (
+      <div
+        title="Imported — copied from the public library"
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-tighter transition-colors bg-primary/15 text-primary"
+      >
+        <Upload className="w-2.5 h-2.5" />
+        Imported
+      </div>
+    );
+  }
+
   return (
     <div
       title={isPublic ? 'Public — visible to all users' : 'Private — only you can see this'}
