@@ -157,7 +157,7 @@ def create_app() -> FastAPI:
         app.add_middleware(SentryAsgiMiddleware)  # type: ignore[arg-type]
 
     # ---- CORS ----
-    frontend_origin = getattr(settings, "frontend_origin", "http://localhost:3000")
+    frontend_origin = settings.frontend_origin
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[frontend_origin],

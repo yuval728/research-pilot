@@ -24,7 +24,7 @@ from __future__ import annotations
 import functools
 import os
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import Literal, TypeVar, cast
 
 import yaml
 from pydantic import Field, SecretStr
@@ -166,6 +166,10 @@ class AppSettings(BaseSettings):
         default="INFO"
     )
     sentry_dsn: SecretStr | None = Field(default=None)
+    frontend_origin: str = Field(
+        default="http://localhost:3000",
+        description="Allowed frontend origin for CORS.",
+    )
 
     # Nested settings — each resolved independently from env
     gemini: GeminiSettings = Field(default_factory=GeminiSettings)
@@ -214,10 +218,10 @@ def _build_settings(yaml_path: Path | None = None) -> AppSettings:
             for k, v in overrides.items()
             if k not in ("gemini", "supabase", "langfuse", "pipeline")
         },
-        gemini=_section(GeminiSettings, "gemini"),
-        supabase=_section(SupabaseSettings, "supabase"),
-        langfuse=_section(LangfuseSettings, "langfuse"),
-        pipeline=_section(PipelineSettings, "pipeline"),
+        gemini=cast(GeminiSettings, _section(GeminiSettings, "gemini")),
+        supabase=cast(SupabaseSettings, _section(SupabaseSettings, "supabase")),
+        langfuse=cast(LangfuseSettings, _section(LangfuseSettings, "langfuse")),
+        pipeline=cast(PipelineSettings, _section(PipelineSettings, "pipeline")),
     )
 
 

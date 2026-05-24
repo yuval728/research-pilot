@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 
 import anyio
-import arxiv
+import arxiv  # type: ignore[import-untyped]
 import httpx
 from litellm import aembedding
 from sqlalchemy import func, select, or_
