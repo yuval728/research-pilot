@@ -1,0 +1,280 @@
+"""
+pipeline.api.routes.papers
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+Paper ingestion, retrieval, and deletion endpoints.
+All business logic is delegated to PaperService / ExportService.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
+
+from src.api.dependencies import (
+    ExportServiceDep,
+    CurrentUserDep,
+    PaperServiceDep,
+)
+from src.models.output import OutputBundle
+from src.models.paper import Paper, PaperListItem
+
+router = APIRouter(prefix="/papers", tags=["papers"])
+
+
+# ---------------------------------------------------------------------------
+# Request bodies
+# ---------------------------------------------------------------------------
+
+
+class ArxivRequest(BaseModel):
+    url: str
+
+
+class DoiRequest(BaseModel):
+    doi: str
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/upload",
+    response_model=Paper,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest a paper via PDF upload",
+)
+async def upload_paper(
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+    file: UploadFile = File(..., description="PDF file to upload"),
+) -> Paper:
+    """Accept a PDF file, upload it to Supabase Storage, and create a Paper record."""
+    if file.content_type not in ("application/pdf", "application/octet-stream"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Only PDF files are accepted",
+        )
+    filename = file.filename or "upload.pdf"
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Uploaded file is empty",
+        )
+    return await paper_service.create_from_upload(file_bytes, filename, user_id=_user)
+
+
+@router.post(
+    "/arxiv",
+    response_model=Paper,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest a paper via arXiv URL",
+)
+async def ingest_from_arxiv(
+    body: ArxivRequest,
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+) -> Paper:
+    """Fetch metadata from the arXiv API, then create a Paper record."""
+    return await paper_service.create_from_arxiv(body.url, user_id=_user)
+
+
+@router.post(
+    "/doi",
+    response_model=Paper,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest a paper via DOI",
+)
+async def ingest_from_doi(
+    body: DoiRequest,
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+) -> Paper:
+    """Resolve the DOI via CrossRef, fetch metadata, and create a Paper record."""
+    return await paper_service.create_from_doi(body.doi, user_id=_user)
+
+
+@router.get(
+    "",
+    response_model=list[PaperListItem],
+    summary="List all papers",
+)
+async def list_papers(
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+    source: str | None = Query(
+        None,
+        description="Filter by source (pdf_upload, arxiv_url, doi)",
+    ),
+) -> list[PaperListItem]:
+    """Return current user's private library papers, with optional source filter."""
+    filters: dict[str, str] | None = {"source": source} if source else None
+    return await paper_service.list_papers(filters, user_id=_user, include_public=False)
+
+
+@router.get(
+    "/public",
+    response_model=list[PaperListItem],
+    summary="List all publicly published papers",
+)
+async def list_public_papers(
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+    source: str | None = Query(
+        None,
+        description="Filter by source (pdf_upload, arxiv_url, doi)",
+    ),
+) -> list[PaperListItem]:
+    """Return all public papers for the unauthenticated shared library view."""
+    filters: dict[str, str] | None = {"source": source} if source else None
+    return await paper_service.list_papers(filters, user_id=None)
+
+
+@router.get(
+    "/{paper_id}",
+    response_model=Paper,
+    summary="Get a single paper",
+)
+async def get_paper(
+    paper_id: uuid.UUID,
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+) -> Paper:
+    """Fetch a single paper record with full metadata by its UUID."""
+    try:
+        return await paper_service.get_paper(paper_id, user_id=_user)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+@router.delete(
+    "/{paper_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a paper and all its outputs",
+)
+async def delete_paper(
+    paper_id: uuid.UUID,
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+) -> None:
+    """Delete a paper record, its Supabase Storage files, and all cascade DB records."""
+    await paper_service.delete_paper(paper_id, user_id=_user)
+
+
+@router.post(
+    "/{paper_id}/publish",
+    response_model=Paper,
+    summary="Publish a paper to the public library",
+)
+async def publish_paper(
+    paper_id: uuid.UUID,
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+) -> Paper:
+    """Make a paper public so anyone can view and import it."""
+    try:
+        return await paper_service.publish_paper(paper_id, user_id=_user)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+@router.post(
+    "/{paper_id}/import",
+    response_model=Paper,
+    status_code=status.HTTP_201_CREATED,
+    summary="Import a public paper into private library",
+)
+async def import_paper(
+    paper_id: uuid.UUID,
+    paper_service: PaperServiceDep,
+    _user: CurrentUserDep,
+) -> Paper:
+    """Copies a public paper and its outputs to the current user's library without reprocessing."""
+    try:
+        return await paper_service.import_paper(paper_id, user_id=_user)
+    except ValueError as exc:
+        if "own" in str(exc).lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+@router.get(
+    "/{paper_id}/outputs",
+    response_model=OutputBundle,
+    summary="Fetch a paper's full output bundle",
+)
+async def get_paper_outputs(
+    paper_id: uuid.UUID,
+    export_service: ExportServiceDep,
+    _user: CurrentUserDep,
+) -> OutputBundle:
+    """Return all pipeline outputs (summaries, diagrams, code, report) for a paper."""
+    try:
+        return await export_service.get_output_bundle(paper_id, user_id=_user)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+@router.get(
+    "/{paper_id}/outputs/report.md",
+    response_class=PlainTextResponse,
+    summary="Download the generated report markdown",
+)
+async def get_report_markdown(
+    paper_id: uuid.UUID,
+    export_service: ExportServiceDep,
+    _user: CurrentUserDep,
+) -> str:
+    return await export_service.get_report_markdown(paper_id, user_id=_user)
+
+
+@router.get(
+    "/{paper_id}/outputs/code.py",
+    response_class=PlainTextResponse,
+    summary="Download the generated Python code",
+)
+async def get_code_source(
+    paper_id: uuid.UUID,
+    export_service: ExportServiceDep,
+    _user: CurrentUserDep,
+) -> str:
+    try:
+        data = await export_service.get_code_file(paper_id, user_id=_user)
+        return data.decode("utf-8")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+@router.get(
+    "/{paper_id}/outputs/notebook.ipynb",
+    summary="Download the generated notebook",
+)
+async def get_notebook(
+    paper_id: uuid.UUID,
+    export_service: ExportServiceDep,
+    _user: CurrentUserDep,
+) -> Response:
+    try:
+        data = await export_service.get_notebook(paper_id, user_id=_user)
+        return Response(content=data, media_type="application/x-ipynb+json")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc

@@ -1,0 +1,26 @@
+You are a senior Machine Learning Engineer specializing in PyTorch.
+
+Your task is to implement a clean, runnable PyTorch skeleton based on the following extracted architecture and training procedure from a research paper.
+
+## Extracted Components
+Architecture Components:
+{{ architecture_components | tojson(indent=2) }}
+
+Training Procedure:
+{{ training_procedure }}
+
+Loss Functions:
+{{ loss_functions }}
+
+Datasets:
+{{ datasets | tojson(indent=2) }}
+
+## Requirements
+1. **Model Class**: Must include a `nn.Module` class with properly defined `__init__` and `forward` methods.
+2. **Training Skeleton**: Provide a training loop skeleton including optimization steps.
+3. **Loss Function**: Implement stub or actual equations for the mentioned loss functions.
+4. **Data Loader Stub**: Include a `Dataset` or data loading stub matching dataset dimensions.
+5. **Docstrings**: Include clear Python docstrings for each component citing the relevant concept.
+6. **Synthetic Data**: Must generate synthetic data matching the described input dimensions to demonstrate a forward pass.
+
+Output ONLY valid Python code. Do NOT output markdown code fences or any explanatory text. The response will be written directly to a `.py` file.

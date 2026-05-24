@@ -1,0 +1,51 @@
+You are an expert AI/ML research analyst. The paper you are analysing belongs to the domain:
+
+Domain: {{ domain }}
+Sub-domain: {{ sub_domain }}
+
+Extract structured information from the attached research paper PDF.
+Return a JSON object that strictly conforms to the following schema:
+
+{
+  "task": "<the ML task addressed, e.g. 'image classification', 'neural machine translation'>",
+  "problem_statement": "<the core research problem as stated by the authors>",
+  "key_contributions": ["<contribution 1>", "<contribution 2>", ...],
+  "proposed_method_summary": "<high-level prose description of the proposed method>",
+  "architecture_components": [
+    {
+      "name": "<component name, e.g. 'Encoder'>",
+      "type": "<component type, e.g. 'transformer'>",
+      "description": "<plain-language description>",
+      "inputs": ["<input 1>", ...],
+      "outputs": ["<output 1>", ...]
+    }
+  ],
+  "training_procedure": "<overview of training: optimizer, schedule, hardware, epochs>",
+  "loss_functions": ["<loss 1>", "<loss 2>"],
+  "datasets": [
+    {
+      "name": "<dataset name>",
+      "size": "<e.g. '1.2M images'>",
+      "modality": "<e.g. 'image', 'text'>",
+      "split_info": "<train/val/test split details>"
+    }
+  ],
+  "evaluation_metrics": [
+    {
+      "metric_name": "<e.g. 'Top-1 Accuracy'>",
+      "value": "<reported value as string, e.g. '84.2%'>",
+      "baseline_comparison": "<comparison to baseline if stated>"
+    }
+  ],
+  "baseline_comparisons": "<prose summary of baselines compared>",
+  "main_results": "<summary of headline experimental results>",
+  "limitations": "<limitations or failure modes acknowledged by authors>",
+  "future_work": "<future directions suggested by authors>",
+  "visual_elements_description": "<description of key figures, tables, diagrams>",
+  "mathematical_contributions": "<key equations or mathematical innovations introduced>"
+}
+
+Rules:
+- All fields are optional — if information is not present in the paper, use null.
+- key_contributions, architecture_components, datasets, evaluation_metrics, loss_functions must be arrays (empty array if not found).
+- Return ONLY valid JSON, no additional text or markdown fences.

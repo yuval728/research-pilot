@@ -19,4 +19,4 @@ repos:
     hooks:
       - id: mypy
         files: ^pipeline/
-        additional_dependencies: [pydantic, types-requests]
+        additional_dependencies: [pydantic, types-requests, types-PyYAML]
