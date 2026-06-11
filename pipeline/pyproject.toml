@@ -73,3 +73,16 @@ ignore_missing_imports = true
 init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Exclude standalone scripts that are not part of the test suite.
+# These files use module-level side-effects and top-level imports that are
+# incompatible with pytest collection.
+addopts = [
+    "--ignore=e2e_test.py",
+    "--ignore=pipeline_demo.py",
+    "--ignore=pipeline_demo_2.py",
+    "--ignore=hello.py",
+]

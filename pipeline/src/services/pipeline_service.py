@@ -193,8 +193,9 @@ class PipelineService:
         self, paper_id: uuid.UUID, user_id: str | uuid.UUID | None = None
     ) -> PipelineRun:
         """Sets up a new PipelineRunORM and invokes the LangGraph research pipeline in background."""
-        stmt = select(PaperORM).where(PaperORM.id == paper_id)
+        paper_orm = None
         if user_id:
+            stmt = select(PaperORM).where(PaperORM.id == paper_id)
             parsed_user_id = (
                 uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
             )
@@ -202,8 +203,10 @@ class PipelineService:
                 PaperORM.user_id == parsed_user_id
             )  # Must own the paper to run pipeline
 
-        res = await self.db.execute(stmt)
-        paper_orm = res.scalars().first()
+            res = await self.db.execute(stmt)
+            paper_orm = res.scalars().first()
+        else:
+            paper_orm = await self.db.get(PaperORM, paper_id)
         if not paper_orm:
             raise ValueError(
                 f"Paper {paper_id} not found or you don't have permission to modify it"

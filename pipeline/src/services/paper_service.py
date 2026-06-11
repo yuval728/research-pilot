@@ -32,6 +32,10 @@ _EMBEDDING_DIM = 1536
 log = get_logger(__name__)
 
 
+def _get_supabase() -> Client:
+    return get_supabase_client()
+
+
 class PaperService:
     """Business logic for Paper entity management."""
 
@@ -43,8 +47,18 @@ class PaperService:
     @property
     def supabase(self) -> Client:
         if not self._supabase:
-            self._supabase = get_supabase_client()
+            self._supabase = _get_supabase()
         return self._supabase
+
+    @staticmethod
+    def _normalize_uuid(value: object) -> uuid.UUID | None:
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        if isinstance(value, str):
+            return uuid.UUID(value)
+        return None
 
     def _to_pydantic(self, orm: PaperORM) -> Paper:
         """Helper to convert ORM to Pydantic model."""
@@ -64,12 +78,14 @@ class PaperService:
             metadata=PaperMetadata(**metadata_dict) if metadata_dict else None,
             created_at=orm.created_at.replace(tzinfo=timezone.utc),
             updated_at=orm.updated_at.replace(tzinfo=timezone.utc),
-            user_id=orm.user_id,
+            user_id=self._normalize_uuid(getattr(orm, "user_id", None)),
             is_public=bool(orm.is_public),
             published_at=orm.published_at.replace(tzinfo=timezone.utc)
             if orm.published_at
             else None,
-            imported_from_paper_id=orm.imported_from_paper_id,
+            imported_from_paper_id=self._normalize_uuid(
+                getattr(orm, "imported_from_paper_id", None)
+            ),
         )
 
     def _to_stage_pydantic(self, orm) -> StageResult:

@@ -95,7 +95,7 @@ async def test_pipeline_full_attention():
     }
 
     with patch(
-        "pipeline.graph.pipeline.research_pipeline.ainvoke", new_callable=AsyncMock
+        "src.graph.pipeline.research_pipeline.ainvoke", new_callable=AsyncMock
     ) as mock_invoke:
         mock_invoke.return_value = mock_final_state
         final_state = await research_pipeline.ainvoke(initial_state)

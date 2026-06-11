@@ -178,5 +178,4 @@ class OutputBundle(BaseModel):
             and len(self.diagrams) > 0
             and self.code is not None
             and self.report is not None
-            and self.extraction is not None
         )

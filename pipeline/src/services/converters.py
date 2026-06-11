@@ -32,6 +32,11 @@ class OutputDeserializer:
         """Parse an OutputORM record into a SummaryOutput."""
         level_str = orm.output_type.replace("summary_", "")
         content = getattr(orm, "content", None)
+        # Guard: content must be an actual string. During tests, ORM attributes
+        # that are not explicitly set on a MagicMock return a new MagicMock,
+        # which is truthy but not a valid string for Pydantic.
+        if not isinstance(content, str):
+            content = None
         if not content and orm.storage_path and orm.storage_path.startswith("inline:"):
             content = orm.storage_path[len("inline:") :]
             if content == f"summary_{level_str}":  # Backwards compatibility

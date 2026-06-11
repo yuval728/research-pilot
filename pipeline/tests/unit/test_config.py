@@ -39,13 +39,21 @@ _REQUIRED_ENV = {
     "SUPABASE_SERVICE_ROLE_KEY": "service-key",
     "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
     "LANGFUSE_SECRET_KEY": "sk-lf-test",
+    # Pin to the documented default so a developer's .env (which may set a
+    # different temperature) does not break the test_gemini_defaults assertion.
+    "GEMINI_TEMPERATURE": "0.2",
 }
 
 
 def _settings_with_env(**extra: str) -> AppSettings:
     """Build settings with the minimal required env vars + extras."""
     env = {**_REQUIRED_ENV, **extra}
-    with patch.dict(os.environ, env, clear=False):
+    sandbox_cwd = Path("C:/__researchpilot_test_sandbox__")
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("os.getcwd", return_value=str(sandbox_cwd)),
+        patch("pathlib.Path.cwd", return_value=sandbox_cwd),
+    ):
         get_settings.cache_clear()
         return get_settings()
 
@@ -186,7 +194,12 @@ class TestYamlOverrides:
         yaml_file = tmp_path / "config.yaml"
         yaml_file.write_text(yaml.dump(config_data))
 
-        with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
+        sandbox_cwd = Path("C:/__researchpilot_test_sandbox__")
+        with (
+            patch.dict(os.environ, _REQUIRED_ENV, clear=True),
+            patch("os.getcwd", return_value=str(sandbox_cwd)),
+            patch("pathlib.Path.cwd", return_value=sandbox_cwd),
+        ):
             settings = _build_settings(yaml_path=yaml_file)
 
         assert settings.environment == "staging"
@@ -196,6 +209,11 @@ class TestYamlOverrides:
 
     def test_missing_yaml_uses_defaults(self, tmp_path: Path):
         missing = tmp_path / "nonexistent.yaml"
-        with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
+        sandbox_cwd = Path("C:/__researchpilot_test_sandbox__")
+        with (
+            patch.dict(os.environ, _REQUIRED_ENV, clear=True),
+            patch("os.getcwd", return_value=str(sandbox_cwd)),
+            patch("pathlib.Path.cwd", return_value=sandbox_cwd),
+        ):
             settings = _build_settings(yaml_path=missing)
         assert settings.environment == "development"
