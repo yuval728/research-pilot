@@ -62,7 +62,7 @@ class GeminiSettings(BaseSettings):
     )
 
     # Generation parameters
-    temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_output_tokens: int = Field(default=8192, ge=1)
 
     # Reliability
