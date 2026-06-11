@@ -32,7 +32,7 @@ def test_search_papers(test_client: TestClient):
     )
 
     with patch(
-        "pipeline.services.paper_service.PaperService.search_papers",
+        "src.services.paper_service.PaperService.search_papers",
         new_callable=AsyncMock,
     ) as mock_search:
         mock_search.return_value = [mock_paper]
@@ -48,7 +48,7 @@ def test_search_papers(test_client: TestClient):
 def test_search_papers_empty(test_client: TestClient):
     """Test GET /api/v1/search with no results"""
     with patch(
-        "pipeline.services.paper_service.PaperService.search_papers",
+        "src.services.paper_service.PaperService.search_papers",
         new_callable=AsyncMock,
     ) as mock_search:
         mock_search.return_value = []

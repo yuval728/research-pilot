@@ -24,13 +24,13 @@ from src.models.paper import Paper, PaperListItem, PaperSource
 
 @pytest.fixture
 def mock_paper_service():
-    with patch("pipeline.api.routes.papers.PaperServiceDep") as MockSvc:
+    with patch("src.api.routes.papers.PaperServiceDep") as MockSvc:
         yield MockSvc
 
 
 @pytest.fixture
 def mock_export_service():
-    with patch("pipeline.api.routes.papers.ExportServiceDep") as MockSvc:
+    with patch("src.api.routes.papers.ExportServiceDep") as MockSvc:
         yield MockSvc
 
 
@@ -50,7 +50,7 @@ def test_list_papers(test_client: TestClient):
     )
 
     with patch(
-        "pipeline.services.paper_service.PaperService.list_papers",
+        "src.services.paper_service.PaperService.list_papers",
         new_callable=AsyncMock,
     ) as mock_list:
         mock_list.return_value = [PaperListItem(paper=mock_paper, latest_run=None)]
@@ -77,7 +77,7 @@ def test_get_paper_success(test_client: TestClient):
     )
 
     with patch(
-        "pipeline.services.paper_service.PaperService.get_paper", new_callable=AsyncMock
+        "src.services.paper_service.PaperService.get_paper", new_callable=AsyncMock
     ) as mock_get:
         mock_get.return_value = mock_paper
         response = test_client.get(f"/api/v1/papers/{paper_id}")
@@ -92,7 +92,7 @@ def test_get_paper_not_found(test_client: TestClient):
     paper_id = uuid.uuid4()
 
     with patch(
-        "pipeline.services.paper_service.PaperService.get_paper", new_callable=AsyncMock
+        "src.services.paper_service.PaperService.get_paper", new_callable=AsyncMock
     ) as mock_get:
         mock_get.side_effect = ValueError("Paper not found")
         response = test_client.get(f"/api/v1/papers/{paper_id}")
@@ -116,7 +116,7 @@ def test_upload_paper_pdf(test_client: TestClient, pdf_bytes: bytes):
     )
 
     with patch(
-        "pipeline.services.paper_service.PaperService.create_from_upload",
+        "src.services.paper_service.PaperService.create_from_upload",
         new_callable=AsyncMock,
     ) as mock_upload:
         mock_upload.return_value = mock_paper
@@ -135,13 +135,13 @@ def test_delete_paper(test_client: TestClient):
     paper_id = uuid.uuid4()
 
     with patch(
-        "pipeline.services.paper_service.PaperService.delete_paper",
+        "src.services.paper_service.PaperService.delete_paper",
         new_callable=AsyncMock,
     ) as mock_delete:
         response = test_client.delete(f"/api/v1/papers/{paper_id}")
 
     assert response.status_code == status.HTTP_204_NO_CONTENT
-    mock_delete.assert_called_once_with(paper_id)
+    mock_delete.assert_called_once_with(paper_id, user_id="test-user-id")
 
 
 def test_get_paper_outputs_includes_extraction(test_client: TestClient):
@@ -163,7 +163,7 @@ def test_get_paper_outputs_includes_extraction(test_client: TestClient):
     )
 
     with patch(
-        "pipeline.services.export_service.ExportService.get_output_bundle",
+        "src.services.export_service.ExportService.get_output_bundle",
         new_callable=AsyncMock,
     ) as mock_bundle:
         mock_bundle.return_value = bundle
@@ -176,7 +176,7 @@ def test_get_paper_outputs_includes_extraction(test_client: TestClient):
 def test_get_code_source_missing_returns_404(test_client: TestClient):
     paper_id = uuid.uuid4()
     with patch(
-        "pipeline.services.export_service.ExportService.get_code_file",
+        "src.services.export_service.ExportService.get_code_file",
         new_callable=AsyncMock,
     ) as mock_get:
         mock_get.side_effect = ValueError("No code_python found for paper")
@@ -187,7 +187,7 @@ def test_get_code_source_missing_returns_404(test_client: TestClient):
 def test_get_notebook_missing_returns_404(test_client: TestClient):
     paper_id = uuid.uuid4()
     with patch(
-        "pipeline.services.export_service.ExportService.get_notebook",
+        "src.services.export_service.ExportService.get_notebook",
         new_callable=AsyncMock,
     ) as mock_get:
         mock_get.side_effect = ValueError("No code_notebook found for paper")

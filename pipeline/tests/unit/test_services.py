@@ -84,10 +84,21 @@ def _make_db(
     db.refresh = AsyncMock()
     db.delete = AsyncMock()
     result_mock = MagicMock()
-    result_mock.scalars.return_value.all.return_value = (
-        execute_return if execute_return is not None else []
-    )
-    result_mock.scalar_one_or_none.return_value = execute_return
+    result_data = execute_return if execute_return is not None else get_return
+    if isinstance(result_data, list):
+        result_mock.scalars.return_value.first.return_value = (
+            result_data[0] if result_data else None
+        )
+        result_mock.scalars.return_value.all.return_value = result_data
+        result_mock.scalar_one_or_none.return_value = (
+            result_data[0] if result_data else None
+        )
+    else:
+        result_mock.scalars.return_value.first.return_value = result_data
+        result_mock.scalars.return_value.all.return_value = (
+            [] if result_data is None else [result_data]
+        )
+        result_mock.scalar_one_or_none.return_value = result_data
     db.execute = AsyncMock(return_value=result_mock)
     return db
 
@@ -105,8 +116,8 @@ class TestPaperServiceCreateFromUpload:
         db.refresh = AsyncMock(side_effect=lambda o: None)
 
         with (
-            patch("pipeline.services.paper_service.get_settings") as mock_cfg,
-            patch("pipeline.services.paper_service._get_supabase") as mock_sup,
+            patch("src.services.paper_service.get_settings") as mock_cfg,
+            patch("src.services.paper_service._get_supabase") as mock_sup,
             patch("anyio.to_thread.run_sync", new_callable=AsyncMock) as mock_thread,
         ):
             mock_cfg.return_value = _fake_settings()
@@ -117,9 +128,7 @@ class TestPaperServiceCreateFromUpload:
             db.get = AsyncMock(return_value=paper_orm)
 
             # Simulate _ingest: patch PaperORM constructor and db.commit
-            with patch(
-                "pipeline.services.paper_service.PaperORM", return_value=paper_orm
-            ):
+            with patch("src.services.paper_service.PaperORM", return_value=paper_orm):
                 from src.services.paper_service import PaperService  # noqa: PLC0415
 
                 svc = PaperService(db)
@@ -132,7 +141,7 @@ class TestPaperServiceCreateFromUpload:
         from src.services.paper_service import PaperService  # noqa: PLC0415
 
         with patch(
-            "pipeline.services.paper_service.get_settings",
+            "src.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
             db = _make_db()
@@ -145,7 +154,7 @@ class TestPaperServiceCreateFromUpload:
         from src.services.paper_service import PaperService  # noqa: PLC0415
 
         with patch(
-            "pipeline.services.paper_service.get_settings",
+            "src.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
             db = _make_db()
@@ -162,7 +171,7 @@ class TestPaperServiceGetPaper:
         db = _make_db(get_return=orm)
 
         with patch(
-            "pipeline.services.paper_service.get_settings",
+            "src.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.paper_service import PaperService  # noqa: PLC0415
@@ -178,7 +187,7 @@ class TestPaperServiceGetPaper:
         db = _make_db(get_return=None)
 
         with patch(
-            "pipeline.services.paper_service.get_settings",
+            "src.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.paper_service import PaperService  # noqa: PLC0415
@@ -202,7 +211,7 @@ class TestPaperServiceListPapers:
         db.execute = AsyncMock(side_effect=[papers_result_mock, runs_result_mock])
 
         with patch(
-            "pipeline.services.paper_service.get_settings",
+            "src.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.paper_service import PaperService  # noqa: PLC0415
@@ -222,7 +231,7 @@ class TestPaperServiceListPapers:
         db.execute = AsyncMock(return_value=papers_result_mock)
 
         with patch(
-            "pipeline.services.paper_service.get_settings",
+            "src.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.paper_service import PaperService  # noqa: PLC0415
@@ -242,7 +251,7 @@ class TestPaperServiceDeletePaper:
 
         with (
             patch(
-                "pipeline.services.paper_service.get_settings",
+                "src.services.paper_service.get_settings",
                 return_value=_fake_settings(),
             ),
             patch("anyio.to_thread.run_sync", new_callable=AsyncMock),
@@ -261,7 +270,7 @@ class TestPaperServiceDeletePaper:
         db = _make_db(get_return=None)
 
         with patch(
-            "pipeline.services.paper_service.get_settings",
+            "src.services.paper_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.paper_service import PaperService  # noqa: PLC0415
@@ -290,13 +299,12 @@ class TestPipelineServiceTriggerRun:
         db.add = MagicMock()
         db.commit = AsyncMock()
         db.refresh = AsyncMock()
+        run_result_mock = MagicMock()
+        run_result_mock.scalar_one.return_value = run_orm
+        db.execute = AsyncMock(return_value=run_result_mock)
 
         with (
-            patch(
-                "pipeline.services.pipeline_service.PipelineRunORM",
-                return_value=run_orm,
-            ),
-            patch("pipeline.services.pipeline_service.research_pipeline"),
+            patch("src.services.pipeline_service.research_pipeline"),
             patch("asyncio.get_running_loop") as mock_loop,
         ):
             mock_loop.return_value.create_task = MagicMock()
@@ -374,12 +382,10 @@ class TestPipelineServiceTriggerRun:
 
         with (
             patch(
-                "pipeline.services.pipeline_service.get_db_context",
+                "src.services.pipeline_service.get_db_context",
                 side_effect=lambda: FakeContext(fake_session),
             ),
-            patch(
-                "pipeline.services.pipeline_service.research_pipeline"
-            ) as mock_pipeline,
+            patch("src.services.pipeline_service.research_pipeline") as mock_pipeline,
         ):
             mock_pipeline.astream = fake_astream
 
@@ -506,11 +512,12 @@ class TestExportServiceGetOutputBundle:
         paper_id = uuid.uuid4()
         result_mock = MagicMock()
         result_mock.scalars.return_value.all.return_value = []
+        result_mock.scalar_one_or_none.return_value = None
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result_mock)
 
         with patch(
-            "pipeline.services.export_service.get_settings",
+            "src.services.export_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.export_service import ExportService  # noqa: PLC0415
@@ -534,11 +541,12 @@ class TestExportServiceGetOutputBundle:
 
         result_mock = MagicMock()
         result_mock.scalars.return_value.all.return_value = [orm]
+        result_mock.scalar_one_or_none.return_value = None
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result_mock)
 
         with patch(
-            "pipeline.services.export_service.get_settings",
+            "src.services.export_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.export_service import ExportService  # noqa: PLC0415
@@ -555,15 +563,16 @@ class TestExportServiceGetOutputBundle:
         orm = MagicMock()
         orm.paper_id = paper_id
         orm.output_type = "summary_bullets"
-        orm.storage_path = "• contribution A\n• contribution B"
+        orm.storage_path = "inline:• contribution A\n• contribution B"
 
         result_mock = MagicMock()
         result_mock.scalars.return_value.all.return_value = [orm]
+        result_mock.scalar_one_or_none.return_value = None
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result_mock)
 
         with patch(
-            "pipeline.services.export_service.get_settings",
+            "src.services.export_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.export_service import ExportService  # noqa: PLC0415
@@ -592,7 +601,7 @@ class TestExportServiceGetOutputBundle:
         db.execute = AsyncMock(side_effect=[outputs_result, extraction_result])
 
         with patch(
-            "pipeline.services.export_service.get_settings",
+            "src.services.export_service.get_settings",
             return_value=_fake_settings(),
         ):
             from src.services.export_service import ExportService  # noqa: PLC0415

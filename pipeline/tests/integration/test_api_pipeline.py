@@ -19,7 +19,7 @@ def test_get_latest_run_for_paper_returns_latest_run(test_client: TestClient):
     )
 
     with patch(
-        "pipeline.services.pipeline_service.PipelineService.get_latest_run_for_paper",
+        "src.services.pipeline_service.PipelineService.get_latest_run_for_paper",
         new_callable=AsyncMock,
     ) as mock_latest:
         mock_latest.return_value = run
@@ -34,7 +34,7 @@ def test_get_latest_run_for_paper_returns_null_when_absent(test_client: TestClie
     paper_id = uuid.uuid4()
 
     with patch(
-        "pipeline.services.pipeline_service.PipelineService.get_latest_run_for_paper",
+        "src.services.pipeline_service.PipelineService.get_latest_run_for_paper",
         new_callable=AsyncMock,
     ) as mock_latest:
         mock_latest.return_value = None
