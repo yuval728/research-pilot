@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 # Set required env vars so module-level get_settings() calls don't fail during imports
 os.environ["LLM_API_KEY"] = "test-llm-key"
+os.environ["EMBEDDING_API_KEY"] = "test-embedding-key"
 os.environ["SUPABASE_URL"] = "https://test.supabase.co"
 os.environ["SUPABASE_DB_URL"] = "postgresql+psycopg://u:p@localhost/db"
 os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-svc-key"
