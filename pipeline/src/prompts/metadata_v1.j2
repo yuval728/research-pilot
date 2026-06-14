@@ -1,0 +1,22 @@
+You are an expert bibliographic metadata extractor. Extract the following metadata from the attached research paper PDF.
+
+Return a JSON object that strictly conforms to the following schema:
+
+{
+  "title": "<full paper title>",
+  "authors": ["<author 1>", "<author 2>", ...],
+  "abstract": "<paper abstract or null if not found>",
+  "venue": "<conference or journal name, or null>",
+  "year": <publication year as integer, or null>,
+  "arxiv_id": "<arXiv ID like '2301.00001' or null>",
+  "doi": "<DOI like '10.1145/3292500.3330919' or null>",
+  "page_count": <number of pages as integer, or null>
+}
+
+Rules:
+- All fields are optional — if information is not present in the paper, use null.
+- authors must be an array (empty array if not found).
+- year must be an integer if present.
+- page_count must be an integer if present.
+- arxiv_id must match pattern ^\\d{4}\\.\\d{4,5}(v\\d+)?$ if present.
+- Return ONLY valid JSON, no additional text or markdown fences.

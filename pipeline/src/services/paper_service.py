@@ -370,6 +370,7 @@ class PaperService:
                 model=settings.embedding.model,
                 input=[query],
                 dimensions=_EMBEDDING_DIM,
+                api_key=settings.embedding.api_key.get_secret_value(),
             )
             first = res.data[0]
             raw_vector = (

@@ -171,7 +171,7 @@ async def _update_paper_storage_path(
                     """
                     UPDATE papers
                     SET pdf_storage_path = :path,
-                        metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:new_meta AS JSONB)
+                        metadata = CASE WHEN jsonb_typeof(metadata) = 'object' THEN metadata ELSE '{}'::jsonb END || CAST(:new_meta AS JSONB)
                     WHERE id = CAST(:pid AS UUID)
                     """
                 ),

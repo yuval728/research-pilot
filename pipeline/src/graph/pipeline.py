@@ -16,6 +16,9 @@ Graph topology
     ingest
       │
       ▼
+    metadata ──[already populated?]─► classify (skip)
+      │
+      ▼
     classify ──[confidence < 0.5]──► END
       │
       ▼ (confidence ≥ 0.5)
@@ -88,6 +91,7 @@ from src.graph.nodes import (
     embed_node,
     extract_node,
     ingest_node,
+    metadata_node,
     report_node,
     summarise_node,
 )
@@ -194,6 +198,7 @@ def _build_graph() -> StateGraph:  # type: ignore[type-arg]
 
     # ── Register nodes ───────────────────────────────────────────────────────
     builder.add_node("ingest", ingest_node)
+    builder.add_node("metadata", metadata_node)
     builder.add_node("classify", classify_node)
     builder.add_node("extract", extract_node)
     builder.add_node("parallel_stages", parallel_stages_node)
@@ -202,8 +207,9 @@ def _build_graph() -> StateGraph:  # type: ignore[type-arg]
     # ── Entry edge ───────────────────────────────────────────────────────────
     builder.add_edge(START, "ingest")
 
-    # ── ingest → classify (always) ───────────────────────────────────────────
-    builder.add_edge("ingest", "classify")
+    # ── ingest → metadata → classify (always) ─────────────────────────────────
+    builder.add_edge("ingest", "metadata")
+    builder.add_edge("metadata", "classify")
 
     # ── classify → [extract | END] (confidence gate) ─────────────────────────
     builder.add_conditional_edges(

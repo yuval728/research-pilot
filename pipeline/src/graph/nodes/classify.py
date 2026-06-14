@@ -93,10 +93,16 @@ async def _call_llm_classify(
                     "type": "text",
                     "text": prompt,
                 },
+                # {
+                #     "type": "image_url",  ## SHould this be "file" instead of "image_url" for PDF input? Answer:
+                #     "image_url": {
+                #         "url": f"data:application/pdf;base64,{pdf_b64}",
+                #     },
+                # },
                 {
-                    "type": "image_url",  ## SHould this be "file" instead of "image_url" for PDF input? Answer:
-                    "image_url": {
-                        "url": f"data:application/pdf;base64,{pdf_b64}",
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
                     },
                 },
             ],
@@ -174,7 +180,7 @@ async def _persist_classification(paper_id: str, result: ClassificationResult) -
                 text(
                     """
                     UPDATE papers
-                    SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:new_meta AS JSONB)
+                    SET metadata = CASE WHEN jsonb_typeof(metadata) = 'object' THEN metadata ELSE '{}'::jsonb END || CAST(:new_meta AS JSONB)
                     WHERE id = CAST(:pid AS UUID)
                     """
                 ),

@@ -1,7 +1,7 @@
 """
 pipeline.graph.nodes
 ~~~~~~~~~~~~~~~~~~~~~
-Exports all eight pipeline node functions in a flat namespace so
+Exports all nine pipeline node functions in a flat namespace so
 ``pipeline.py`` can import them without knowing the module layout.
 """
 
@@ -11,11 +11,13 @@ from src.graph.nodes.diagram import diagram_node
 from src.graph.nodes.embed import embed_node
 from src.graph.nodes.extract import extract_node
 from src.graph.nodes.ingest import ingest_node
+from src.graph.nodes.metadata import metadata_node
 from src.graph.nodes.report import report_node
 from src.graph.nodes.summarise import summarise_node
 
 __all__ = [
     "ingest_node",
+    "metadata_node",
     "classify_node",
     "extract_node",
     "summarise_node",

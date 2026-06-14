@@ -62,6 +62,36 @@ class PaperMetadata(BaseModel):
     )
 
 
+class PaperMetadataExtraction(BaseModel):
+    """Bibliographic metadata extracted from a PDF by the metadata extraction node."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str | None = Field(
+        None, min_length=1, description="Full title of the paper."
+    )
+    authors: list[str] = Field(
+        default_factory=list, description="Ordered list of author names."
+    )
+    abstract: str | None = Field(None, description="Paper abstract.")
+    venue: str | None = Field(
+        None, description="Conference or journal where the paper was published."
+    )
+    year: int | None = Field(
+        None, ge=1900, le=2100, description="Publication year (YYYY)."
+    )
+    arxiv_id: str | None = Field(
+        None,
+        pattern=r"^\d{4}\.\d{4,5}(v\d+)?$",
+        description="ArXiv identifier, e.g. '2301.00001' or '2301.00001v2'.",
+    )
+    doi: str | None = Field(
+        None,
+        description="Digital Object Identifier, e.g. '10.1145/3292500.3330919'.",
+    )
+    page_count: int | None = Field(None, ge=1, description="Number of pages.")
+
+
 # ---------------------------------------------------------------------------
 # Core entity
 # ---------------------------------------------------------------------------

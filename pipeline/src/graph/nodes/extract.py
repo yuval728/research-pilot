@@ -90,10 +90,16 @@ async def _call_llm_extract(
             "role": "user",
             "content": [
                 {"type": "text", "text": prompt},
+                # {
+                #     "type": "image_url",
+                #     "image_url": {
+                #         "url": f"data:application/pdf;base64,{pdf_b64}",
+                #     },
+                # },
                 {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:application/pdf;base64,{pdf_b64}",
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
                     },
                 },
             ],
