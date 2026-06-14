@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,25 +29,29 @@ def _paper_orm(
     source: str = "arxiv_url",
     source_url: str | None = "https://arxiv.org/abs/1706.03762",
     pdf_storage_path: str | None = None,
-    metadata_: dict | None = None,
+    metadata_: Any | None = None,
 ) -> MagicMock:
     orm = MagicMock()
     orm.id = paper_id or uuid.uuid4()
     orm.source = source
     orm.source_url = source_url
     orm.pdf_storage_path = pdf_storage_path
-    orm.metadata_ = metadata_ or {
-        "title": "Test Paper",
-        "authors": [],
-        "abstract": None,
-        "venue": None,
-        "year": 2024,
-        "arxiv_id": None,
-        "doi": None,
-        "page_count": None,
-        "domain": None,
-        "sub_domain": None,
-    }
+    orm.metadata_ = (
+        metadata_
+        if metadata_ is not None
+        else {
+            "title": "Test Paper",
+            "authors": [],
+            "abstract": None,
+            "venue": None,
+            "year": 2024,
+            "arxiv_id": None,
+            "doi": None,
+            "page_count": None,
+            "domain": None,
+            "sub_domain": None,
+        }
+    )
     orm.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
     orm.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     return orm
@@ -183,6 +188,42 @@ class TestPaperServiceGetPaper:
         assert isinstance(paper, Paper)
 
     @pytest.mark.asyncio
+    async def test_malformed_metadata_does_not_break_paper_conversion(self):
+        paper_id = uuid.uuid4()
+        orm = _paper_orm(paper_id=paper_id, metadata_=["not", "an", "object"])
+        db = _make_db(get_return=orm)
+
+        with patch(
+            "src.services.paper_service.get_settings",
+            return_value=_fake_settings(),
+        ):
+            from src.services.paper_service import PaperService  # noqa: PLC0415
+
+            svc = PaperService(db)
+            paper = await svc.get_paper(paper_id)
+
+        assert paper.id == orm.id
+        assert paper.metadata is None
+
+    @pytest.mark.asyncio
+    async def test_json_string_metadata_is_recovered(self):
+        paper_id = uuid.uuid4()
+        orm = _paper_orm(paper_id=paper_id, metadata_='{"title": "Recovered"}')
+        db = _make_db(get_return=orm)
+
+        with patch(
+            "src.services.paper_service.get_settings",
+            return_value=_fake_settings(),
+        ):
+            from src.services.paper_service import PaperService  # noqa: PLC0415
+
+            svc = PaperService(db)
+            paper = await svc.get_paper(paper_id)
+
+        assert paper.metadata is not None
+        assert paper.metadata.title == "Recovered"
+
+    @pytest.mark.asyncio
     async def test_not_found_raises_value_error(self):
         db = _make_db(get_return=None)
 
@@ -316,6 +357,36 @@ class TestPipelineServiceTriggerRun:
 
         assert isinstance(result, PipelineRun)
         assert result.paper_id == run_orm.paper_id
+
+    @pytest.mark.asyncio
+    async def test_trigger_run_ignores_malformed_metadata(self):
+        paper_id = uuid.uuid4()
+        paper_orm = _paper_orm(paper_id=paper_id, metadata_=["bad"])
+        run_orm = _run_orm(paper_id=paper_id)
+
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=paper_orm)
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        run_result_mock = MagicMock()
+        run_result_mock.scalar_one.return_value = run_orm
+        db.execute = AsyncMock(return_value=run_result_mock)
+
+        with (
+            patch("src.services.pipeline_service.research_pipeline"),
+            patch("src.services.pipeline_service.make_initial_state") as mock_state,
+            patch("asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_state.return_value = {"run_id": str(run_orm.id)}
+            mock_loop.return_value.create_task = MagicMock()
+
+            from src.services.pipeline_service import PipelineService  # noqa: PLC0415
+
+            svc = PipelineService(db)
+            result = await svc.trigger_run(paper_id)
+
+        assert isinstance(result, PipelineRun)
+        assert mock_state.call_args.kwargs["paper_metadata"] is None
 
     @pytest.mark.asyncio
     async def test_trigger_run_paper_not_found_raises(self):
@@ -620,8 +691,10 @@ class TestExportServiceGetOutputBundle:
 
 def _fake_settings() -> MagicMock:
     settings = MagicMock()
-    settings.gemini.embedding_model = "gemini/text-embedding-004"
-    settings.gemini.api_key.get_secret_value.return_value = "test-key"
+    settings.embedding.model = "llm/text-embedding-004"
+    settings.embedding.api_key.get_secret_value.return_value = "test-embedding-key"
+    settings.llm.model = "gemini/gemini-2.0-flash"
+    settings.llm.api_key.get_secret_value.return_value = "test-key"
     settings.supabase.url = "https://test.supabase.co"
     settings.supabase.papers_bucket = "papers"
     settings.supabase.outputs_bucket = "outputs"

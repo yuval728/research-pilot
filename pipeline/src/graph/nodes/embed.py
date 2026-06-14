@@ -11,7 +11,7 @@ Responsibilities
    - key contributions
    - proposed method
    - headline results
-3. Calls ``litellm.embedding()`` with ``gemini/text-embedding-004`` per chunk.
+3. Calls ``litellm.embedding()`` with ``llm/text-embedding-004`` per chunk.
 4. Stores 1536-d vectors in the ``embeddings`` table via pgvector.
 5. Updates state with confirmation.
 6. Emits ``STAGE_COMPLETED`` event.
@@ -188,8 +188,8 @@ async def embed_node(state: PipelineState) -> dict[str, Any]:
         }
 
     try:
-        model = ctx.settings.gemini.embedding_model
-        api_key = ctx.settings.gemini.api_key.get_secret_value()
+        model = ctx.settings.embedding.model
+        api_key = ctx.settings.embedding.api_key.get_secret_value()
 
         paper_title: str | None = None
         if paper_metadata:

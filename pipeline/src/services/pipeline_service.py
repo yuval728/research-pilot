@@ -17,10 +17,12 @@ from src.db.models import PaperORM, PipelineRunORM, StageResultORM
 from src.db.session import get_db_context
 from src.graph.pipeline import research_pipeline
 from src.graph.state import PipelineState, make_initial_state
-from src.models.paper import PaperMetadata
 from src.models.run import PipelineRun, RunStatus, StageResult, StageStatus
 from src.services.converters import run_orm_to_pydantic, stage_orm_to_pydantic
+from src.services.paper_metadata import paper_metadata_model
 import structlog
+
+log = structlog.get_logger(__name__)
 
 
 class PipelineService:
@@ -231,7 +233,9 @@ class PipelineService:
         run_res = await self.db.execute(run_stmt)
         run_orm = run_res.scalar_one()
 
-        metadata = PaperMetadata(**paper_orm.metadata_) if paper_orm.metadata_ else None
+        metadata = paper_metadata_model(
+            paper_orm.metadata_, paper_id=paper_orm.id, log=log
+        )
 
         initial_state = make_initial_state(
             run_id=str(run_id),
@@ -395,7 +399,9 @@ class PipelineService:
         if not paper_orm:
             raise ValueError("Associated Paper not found for retry")
 
-        metadata = PaperMetadata(**paper_orm.metadata_) if paper_orm.metadata_ else None
+        metadata = paper_metadata_model(
+            paper_orm.metadata_, paper_id=paper_orm.id, log=log
+        )
 
         # Build initial state. Graph nodes checking DB will skip completed stages, executing only pending.
         initial_state = make_initial_state(

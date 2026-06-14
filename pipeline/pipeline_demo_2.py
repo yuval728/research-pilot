@@ -103,6 +103,7 @@ try:
     from src.db.session import get_db_context
     from src.graph.pipeline import research_pipeline
     from src.graph.state import PipelineState, make_initial_state
+    from src.domains.ai_ml.schema import AiMlExtraction
     from src.models.output import DiagramType, SummaryLevel
     from src.models.run import StageStatus
     from src.services.paper_service import PaperService
@@ -219,6 +220,10 @@ def inspect_extraction(state: PipelineState) -> None:
     ext = state.get("extraction")
     if ext is None:
         _warn("extraction is None")
+        return
+
+    if not isinstance(ext, AiMlExtraction):
+        _warn(f"unexpected extraction type: {type(ext).__name__}")
         return
 
     _kv("task", ext.task or "—")
@@ -396,7 +401,7 @@ async def main() -> None:
     _banner("ResearchPilot — Output Quality Inspector")
     settings = get_settings()
     print(f"  paper       : {ARXIV_URL}")
-    print(f"  gemini model: {settings.gemini.default_model}")
+    print(f"  gemini model: {settings.llm.model}")
     print(f"  started     : {datetime.now().strftime('%H:%M:%S')}")
 
     # Step 1 — ingest

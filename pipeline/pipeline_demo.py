@@ -290,6 +290,10 @@ async def run_scenario(scenario: Scenario) -> PipelineState:
                 metadata=scenario.paper_metadata,
                 created_at=orm.created_at.replace(tzinfo=timezone.utc),
                 updated_at=orm.updated_at.replace(tzinfo=timezone.utc),
+                user_id=None,
+                is_public=False,
+                published_at=None,
+                imported_from_paper_id=None,
             )
             _ok(f"Synthetic paper created  │  id={paper.id}")
             if paper.metadata:
@@ -393,7 +397,7 @@ async def main() -> None:
     _h1("ResearchPilot — Pipeline Demo  (direct service calls)")
     settings = get_settings()
     print(f"  environment : {settings.environment}")
-    print(f"  gemini model: {settings.gemini.default_model}")
+    print(f"  gemini model: {settings.llm.model}")
     print(f"  langfuse    : {'enabled' if settings.langfuse.enabled else 'disabled'}")
     print(f"  scenarios   : {len(SCENARIOS)}")
     print(f"  started at  : {datetime.now().strftime('%H:%M:%S')}")

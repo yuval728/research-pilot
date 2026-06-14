@@ -26,6 +26,7 @@ from src.db.models import PipelineRunORM
 from src.models.paper import Paper, PaperListItem, PaperMetadata, PaperSource
 from src.models.run import PipelineRun, StageResult
 from src.services.converters import run_orm_to_pydantic, stage_orm_to_pydantic
+from src.services.paper_metadata import paper_metadata_dict, paper_metadata_model
 
 settings = get_settings()
 _EMBEDDING_DIM = 1536
@@ -62,20 +63,12 @@ class PaperService:
 
     def _to_pydantic(self, orm: PaperORM) -> Paper:
         """Helper to convert ORM to Pydantic model."""
-        metadata_dict = dict(orm.metadata_ or {})
-        # Normalize legacy classification keys into canonical API fields.
-        if metadata_dict.get("domain") is None and metadata_dict.get("cls_domain"):
-            metadata_dict["domain"] = metadata_dict["cls_domain"]
-        if metadata_dict.get("sub_domain") is None and metadata_dict.get(
-            "cls_sub_domain"
-        ):
-            metadata_dict["sub_domain"] = metadata_dict["cls_sub_domain"]
         return Paper(
             id=orm.id,
             source=PaperSource(orm.source),
             source_url=orm.source_url,  # type: ignore[arg-type]
             pdf_storage_path=orm.pdf_storage_path,
-            metadata=PaperMetadata(**metadata_dict) if metadata_dict else None,
+            metadata=paper_metadata_model(orm.metadata_, paper_id=orm.id, log=log),
             created_at=orm.created_at.replace(tzinfo=timezone.utc),
             updated_at=orm.updated_at.replace(tzinfo=timezone.utc),
             user_id=self._normalize_uuid(getattr(orm, "user_id", None)),
@@ -374,7 +367,7 @@ class PaperService:
         """Queries pgvector similarity search using LiteLLM, enforcing privacy."""
         try:
             res = await aembedding(
-                model=settings.gemini.embedding_model,
+                model=settings.embedding.model,
                 input=[query],
                 dimensions=_EMBEDDING_DIM,
             )
@@ -395,7 +388,7 @@ class PaperService:
         except Exception as exc:  # noqa: BLE001
             raise EmbeddingError(
                 "Failed to generate a valid query embedding.",
-                model=settings.gemini.embedding_model,
+                model=settings.embedding.model,
                 cause=exc,
             ) from exc
 
@@ -539,7 +532,10 @@ class PaperService:
             source=src_orm.source,
             source_url=src_orm.source_url,
             pdf_storage_path=src_orm.pdf_storage_path,  # Share the same PDF file
-            metadata_=dict(src_orm.metadata_) if src_orm.metadata_ else None,
+            metadata_=paper_metadata_dict(
+                src_orm.metadata_, paper_id=src_orm.id, log=log
+            )
+            or None,
             user_id=parsed_user_id,
             is_public=False,
             imported_from_paper_id=src_orm.id,

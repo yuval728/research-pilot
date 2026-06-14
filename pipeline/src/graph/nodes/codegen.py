@@ -7,7 +7,7 @@ Responsibilities
 ----------------
 1. Works from ``state["extraction"]``.
 2. Renders ``codegen_v1.j2`` with architecture, training, and dataset info.
-3. Sends to Gemini via LiteLLM — returns Python source code.
+3. Sends to LLM via LiteLLM — returns Python source code.
 4. Validates with ``ast.parse()``; retries with syntax error feedback.
 5. Exports ``.py`` file and Jupyter notebook via ``nbformat``.
 6. Uploads both to Supabase Storage ``outputs`` bucket.
@@ -89,15 +89,15 @@ def _validate_python(code: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-async def _call_gemini_codegen(
+async def _call_llm_codegen(
     prompt: str,
     run_id: str,
     collector: TelemetryCollector,
     max_retries: int = 3,
 ) -> str:
-    """Call Gemini to generate implementation code, with retry on syntax failure."""
+    """Call LLM to generate implementation code, with retry on syntax failure."""
     settings = get_settings()
-    model = settings.gemini.default_model
+    model = settings.llm.model
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
@@ -106,10 +106,10 @@ async def _call_gemini_codegen(
             response = await litellm.acompletion(
                 model=model,
                 messages=messages,
-                temperature=settings.gemini.temperature,
-                max_tokens=settings.gemini.max_output_tokens,
+                temperature=settings.llm.temperature,
+                max_tokens=settings.llm.max_output_tokens,
                 num_retries=3,
-                api_key=settings.gemini.api_key.get_secret_value(),
+                api_key=settings.llm.api_key.get_secret_value(),
                 # NOTE: No response_format — the prompt asks for raw Python code.
                 # JSON mode wraps the code in a JSON string, breaking ast.parse.
             )
@@ -339,8 +339,8 @@ async def codegen_node(state: PipelineState) -> dict[str, Any]:
             loss_functions=extraction.loss_functions,
             datasets=[d.model_dump() for d in extraction.datasets],
         )
-        python_code = await _call_gemini_codegen(
-            prompt, ctx.run_id, collector, max_retries=ctx.settings.gemini.max_retries
+        python_code = await _call_llm_codegen(
+            prompt, ctx.run_id, collector, max_retries=ctx.settings.llm.max_retries
         )
 
         ctx.token_usage[_STAGE] = collector.total_tokens

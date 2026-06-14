@@ -8,7 +8,7 @@ Responsibilities
 1. Check cache — if extraction exists in DB for this paper + schema version,
    load and mark cached.
 2. Render ``extract_v1.j2`` with domain & sub_domain context.
-3. Send PDF bytes + prompt to Gemini via LiteLLM + Instructor.
+3. Send PDF bytes + prompt to LLM via LiteLLM + Instructor.
 4. Instructor validates the response against ``AiMlExtraction`` schema;
    auto-retries with error feedback on validation failure.
 5. Store validated extraction in ``extractions`` table as JSONB.
@@ -73,16 +73,16 @@ async def _load_cached_extraction(paper_id: str) -> AiMlExtraction | None:
     return None
 
 
-async def _call_gemini_extract(
+async def _call_llm_extract(
     pdf_bytes: bytes,
     prompt: str,
     run_id: str,
     collector: TelemetryCollector,
     settings: AppSettings,
 ) -> AiMlExtraction:
-    """Call Gemini via LiteLLM + Instructor, returning a validated extraction."""
-    model = settings.gemini.vision_model
-    api_key = settings.gemini.api_key.get_secret_value()
+    """Call LLM via LiteLLM + Instructor, returning a validated extraction."""
+    model = settings.llm.model
+    api_key = settings.llm.api_key.get_secret_value()
     pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
     messages: list[dict[str, Any]] = [
@@ -108,9 +108,9 @@ async def _call_gemini_extract(
             model=model,
             response_model=AiMlExtraction,
             messages=messages,
-            temperature=settings.gemini.temperature,
-            max_tokens=settings.gemini.max_output_tokens,
-            max_retries=settings.gemini.max_retries,
+            temperature=settings.llm.temperature,
+            max_tokens=settings.llm.max_output_tokens,
+            max_retries=settings.llm.max_retries,
             api_key=api_key,
         )
         ctx.set_response(raw_response)
@@ -180,12 +180,12 @@ async def extract_node(state: PipelineState) -> dict[str, Any]:
         if pdf_bytes is None:
             raise ValueError("extract_node requires pdf_bytes in state.")
 
-        # ── 3. Render prompt and call Gemini + Instructor ────────────────
+        # ── 3. Render prompt and call LLM + Instructor ──────────────────
         prompt = render_prompt(
             _PROMPT_PATH, domain=domain or "AI/ML", sub_domain=sub_domain or "General"
         )
         collector = TelemetryCollector(run_id=ctx.run_id, paper_id=ctx.paper_id)
-        extraction = await _call_gemini_extract(
+        extraction = await _call_llm_extract(
             pdf_bytes,
             prompt,
             ctx.run_id,

@@ -3,7 +3,7 @@ name = "pipeline"
 version = "0.1.0"
 description = "Research Pilot — AI-powered research paper intelligence pipeline"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     # Settings & config
     "pydantic-settings>=2.7.0",
@@ -61,7 +61,7 @@ dev = [
 # Pydantic plugin — teaches mypy about field defaults so optional fields
 # don't require explicit arguments at call sites.
 plugins = ["pydantic.mypy"]
-python_version = "3.12"
+python_version = "3.11"
 exclude = "pipeline_demo\\.py|pipeline_demo_2\\.py"
 
 [[tool.mypy.overrides]]

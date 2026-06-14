@@ -32,7 +32,7 @@ from src.core.config import (
 # ---------------------------------------------------------------------------
 
 _REQUIRED_ENV = {
-    "GEMINI_API_KEY": "test-key",
+    "LLM_API_KEY": "test-key",
     "SUPABASE_URL": "https://test.supabase.co",
     "SUPABASE_DB_URL": "postgresql://test:test@localhost/test",
     "SUPABASE_ANON_KEY": "anon-key",
@@ -40,8 +40,8 @@ _REQUIRED_ENV = {
     "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
     "LANGFUSE_SECRET_KEY": "sk-lf-test",
     # Pin to the documented default so a developer's .env (which may set a
-    # different temperature) does not break the test_gemini_defaults assertion.
-    "GEMINI_TEMPERATURE": "0.2",
+    # different temperature) does not break the test_llm_defaults assertion.
+    "LLM_TEMPERATURE": "0.2",
 }
 
 
@@ -102,11 +102,10 @@ class TestDefaults:
         s = _settings_with_env()
         assert s.log_level == "INFO"
 
-    def test_gemini_defaults(self):
+    def test_llm_defaults(self):
         s = _settings_with_env()
-        assert "gemini" in s.gemini.default_model
-        assert s.gemini.temperature == 0.2
-        assert s.gemini.max_retries == 3
+        assert s.llm.temperature == 0.2
+        assert s.llm.max_retries == 3
 
     def test_pipeline_defaults(self):
         s = _settings_with_env()
@@ -142,9 +141,9 @@ class TestEnvVarOverrides:
         s = _settings_with_env(LOG_LEVEL="DEBUG")
         assert s.log_level == "DEBUG"
 
-    def test_override_gemini_temperature(self):
-        s = _settings_with_env(GEMINI_TEMPERATURE="0.7")
-        assert s.gemini.temperature == pytest.approx(0.7)
+    def test_override_llm_temperature(self):
+        s = _settings_with_env(LLM_TEMPERATURE="0.7")
+        assert s.llm.temperature == pytest.approx(0.7)
 
     def test_override_pipeline_cache(self):
         s = _settings_with_env(PIPELINE_CACHE_ENABLED="false")
@@ -164,11 +163,11 @@ class TestSecretValues:
     def teardown_method(self):
         get_settings.cache_clear()
 
-    def test_gemini_api_key_is_secret(self):
+    def test_llm_api_key_is_secret(self):
         s = _settings_with_env()
         # SecretStr should not expose value via str()
-        assert "test-key" not in str(s.gemini.api_key)
-        assert s.gemini.api_key.get_secret_value() == "test-key"
+        assert "test-key" not in str(s.llm.api_key)
+        assert s.llm.api_key.get_secret_value() == "test-key"
 
     def test_supabase_keys_are_secret(self):
         s = _settings_with_env()
@@ -188,7 +187,7 @@ class TestYamlOverrides:
     def test_yaml_override_applied(self, tmp_path: Path):
         config_data = {
             "environment": "staging",
-            "gemini": {"temperature": 0.9, "max_output_tokens": 4096},
+            "llm": {"temperature": 0.9, "max_output_tokens": 4096},
             "pipeline": {"max_pages": 30},
         }
         yaml_file = tmp_path / "config.yaml"
@@ -203,8 +202,8 @@ class TestYamlOverrides:
             settings = _build_settings(yaml_path=yaml_file)
 
         assert settings.environment == "staging"
-        assert settings.gemini.temperature == pytest.approx(0.9)
-        assert settings.gemini.max_output_tokens == 4096
+        assert settings.llm.temperature == pytest.approx(0.9)
+        assert settings.llm.max_output_tokens == 4096
         assert settings.pipeline.max_pages == 30
 
     def test_missing_yaml_uses_defaults(self, tmp_path: Path):

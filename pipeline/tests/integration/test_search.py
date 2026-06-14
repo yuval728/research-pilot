@@ -67,7 +67,7 @@ def test_search_papers_embedding_error_returns_structured_payload(
     ) as mock_search:
         mock_search.side_effect = EmbeddingError(
             "Failed to generate a valid query embedding.",
-            model="gemini/text-embedding-004",
+            model="llm/text-embedding-004",
         )
         response = test_client.post("/api/v1/search", json={"query": "transformer"})
 

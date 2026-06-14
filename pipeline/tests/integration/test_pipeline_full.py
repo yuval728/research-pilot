@@ -60,11 +60,11 @@ def load_fixture_pdf():
 async def test_pipeline_full_attention():
     """
     Simulated full pipeline test to verify the LangGraph nodes connect and flow properly.
-    Since we don't actually want to hit the real Gemini API for all tests, we mock the ainvoke.
+    Since we don't actually want to hit the real LLM API for all tests, we mock the ainvoke.
     """
 
     # In a real integration environment, this would mock Supabase/DB but allow
-    # LiteLLM to hit the Gemini API. We'll simply mock ainvoke here to indicate
+    # LiteLLM to hit the LLM API. We'll simply mock ainvoke here to indicate
     # integration testing setup without failing if API keys are missing locally.
 
     run_id = str(uuid.uuid4())

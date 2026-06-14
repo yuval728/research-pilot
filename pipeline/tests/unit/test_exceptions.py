@@ -138,12 +138,12 @@ class TestDuplicatePaperError:
 
 class TestLLMRateLimitError:
     def test_fields(self):
-        err = LLMRateLimitError("rate limit", model="gemini/flash", retry_after=5.0)
-        assert err.model == "gemini/flash"
+        err = LLMRateLimitError("rate limit", model="llm/flash", retry_after=5.0)
+        assert err.model == "llm/flash"
         assert err.retry_after == 5.0
 
     def test_retry_after_optional(self):
-        err = LLMRateLimitError("rate limit", model="gemini/flash")
+        err = LLMRateLimitError("rate limit", model="llm/flash")
         assert err.retry_after is None
 
     def test_inheritance(self):
@@ -171,8 +171,8 @@ class TestLLMValidationError:
 
 class TestLLMTimeoutError:
     def test_fields(self):
-        err = LLMTimeoutError("timeout", model="gemini/pro", timeout_seconds=120.0)
-        assert err.model == "gemini/pro"
+        err = LLMTimeoutError("timeout", model="llm/pro", timeout_seconds=120.0)
+        assert err.model == "llm/pro"
         assert err.timeout_seconds == 120.0
 
     def test_inheritance(self):

@@ -137,12 +137,12 @@ class TestLLMErrors:
         assert issubclass(TokenBudgetExceededError, LLMError)
 
     def test_rate_limit_attributes(self):
-        exc = LLMRateLimitError("rate limited", model="gemini/flash", retry_after=30.0)
-        assert exc.model == "gemini/flash"
+        exc = LLMRateLimitError("rate limited", model="llm/flash", retry_after=30.0)
+        assert exc.model == "llm/flash"
         assert exc.retry_after == 30.0
 
     def test_rate_limit_retry_after_optional(self):
-        exc = LLMRateLimitError("rate limited", model="gemini/flash")
+        exc = LLMRateLimitError("rate limited", model="llm/flash")
         assert exc.retry_after is None
 
     def test_validation_error_attributes(self):
@@ -157,8 +157,8 @@ class TestLLMErrors:
         assert exc.attempts == 3
 
     def test_timeout_error_attributes(self):
-        exc = LLMTimeoutError("timed out", model="gemini/flash", timeout_seconds=120.0)
-        assert exc.model == "gemini/flash"
+        exc = LLMTimeoutError("timed out", model="llm/flash", timeout_seconds=120.0)
+        assert exc.model == "llm/flash"
         assert exc.timeout_seconds == 120.0
 
     def test_token_budget_exceeded_attributes(self):
@@ -334,7 +334,7 @@ class TestConfigSettings:
         with patch.dict(
             "os.environ",
             {
-                "GEMINI_API_KEY": "fake-key",
+                "LLM_API_KEY": "fake-key",
                 "SUPABASE_URL": "https://test.supabase.co",
                 "SUPABASE_DB_URL": "postgresql+asyncpg://u:p@localhost/db",
                 "SUPABASE_ANON_KEY": "anon",
@@ -355,7 +355,7 @@ class TestConfigSettings:
 
         get_settings.cache_clear()
         env = {
-            "GEMINI_API_KEY": "key1",
+            "LLM_API_KEY": "key1",
             "SUPABASE_URL": "https://test.supabase.co",
             "SUPABASE_DB_URL": "postgresql+asyncpg://u:p@localhost/db",
             "SUPABASE_ANON_KEY": "anon",
@@ -377,7 +377,7 @@ class TestConfigSettings:
 
         get_settings.cache_clear()
         env = {
-            "GEMINI_API_KEY": "k",
+            "LLM_API_KEY": "k",
             "SUPABASE_URL": "https://test.supabase.co",
             "SUPABASE_DB_URL": "postgresql+asyncpg://u:p@localhost/db",
             "SUPABASE_ANON_KEY": "anon",

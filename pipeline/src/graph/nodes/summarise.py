@@ -50,15 +50,15 @@ log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def _call_gemini_summarise_async(
+async def _call_llm_summarise_async(
     prompt: str,
     level: SummaryLevel,
     run_id: str,
     collector: TelemetryCollector,
 ) -> str:
-    """Async wrapper: calls Gemini for one summary level, returns the summary text."""
+    """Async wrapper: calls LLM for one summary level, returns the summary text."""
     settings = get_settings()
-    model = settings.gemini.default_model
+    model = settings.llm.model
 
     messages = [{"role": "user", "content": prompt}]
 
@@ -68,10 +68,10 @@ async def _call_gemini_summarise_async(
         response = await litellm.acompletion(
             model=model,
             messages=messages,
-            temperature=settings.gemini.temperature,
+            temperature=settings.llm.temperature,
             max_tokens=2048,
             num_retries=3,
-            api_key=settings.gemini.api_key.get_secret_value(),
+            api_key=settings.llm.api_key.get_secret_value(),
         )
         ctx.set_response(response)
 
@@ -200,7 +200,7 @@ async def summarise_node(state: PipelineState) -> dict[str, Any]:
 
         # ── Parallel LLM calls: all 4 summary levels at once ─────────────
         tasks = [
-            _call_gemini_summarise_async(prompt, level, ctx.run_id, collector)
+            _call_llm_summarise_async(prompt, level, ctx.run_id, collector)
             for prompt, level in zip(prompts, levels)
         ]
         contents = await asyncio.gather(*tasks)

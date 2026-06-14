@@ -1,7 +1,7 @@
 """
 pipeline.api.routes.search
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-Semantic search endpoints powered by pgvector + Gemini embeddings.
+Semantic search endpoints powered by pgvector + LLM embeddings.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ class SearchResult(BaseModel):
     response_model=list[Paper],
     summary="Semantic paper search",
     description=(
-        "Embeds the query using the configured Gemini embedding model and runs "
+        "Embeds the query using the configured LLM embedding model and runs "
         "a cosine similarity search against all stored paper embeddings via pgvector. "
         "Returns papers ranked by relevance."
     ),

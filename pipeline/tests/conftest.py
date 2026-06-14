@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Set required env vars so module-level get_settings() calls don't fail during imports
-os.environ["GEMINI_API_KEY"] = "test-gemini-key"
+os.environ["LLM_API_KEY"] = "test-llm-key"
 os.environ["SUPABASE_URL"] = "https://test.supabase.co"
 os.environ["SUPABASE_DB_URL"] = "postgresql+psycopg://u:p@localhost/db"
 os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-svc-key"
@@ -274,13 +274,17 @@ def _make_fake_settings():
     settings.environment = "development"
     settings.debug = True
     settings.log_level = "DEBUG"
-    # Gemini
-    settings.gemini.default_model = "gemini/gemini-2.0-flash"
-    settings.gemini.embedding_model = "gemini/text-embedding-004"
-    settings.gemini.api_key.get_secret_value.return_value = "test-gemini-key"
-    settings.gemini.temperature = 0.2
-    settings.gemini.max_retries = 3
-    settings.gemini.timeout_seconds = 120.0
+
+    # Embedding
+    settings.embedding.model = "gemini/gemini-embedding-2-preview"
+    settings.embedding.api_key.get_secret_value.return_value = "test-embedding-key"
+
+    # LLM
+    settings.llm.model = "gemini/gemini-2.0-flash"
+    settings.llm.api_key.get_secret_value.return_value = "test-llm-key"
+    settings.llm.temperature = 0.2
+    settings.llm.max_retries = 3
+    settings.llm.timeout_seconds = 120.0
     # Supabase
     settings.supabase.url = "https://test.supabase.co"
     settings.supabase.papers_bucket = "papers"

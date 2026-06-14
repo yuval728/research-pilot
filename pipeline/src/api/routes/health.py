@@ -96,19 +96,19 @@ async def health_detailed() -> DetailedHealthResponse:
     except Exception as exc:  # noqa: BLE001
         deps["supabase_storage"] = DependencyStatus(healthy=False, detail=str(exc))
 
-    # --- Gemini API (LiteLLM reachability) ---
+    # --- LLM API (LiteLLM reachability) ---
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
                 "https://generativelanguage.googleapis.com/v1beta/models",
-                headers={"x-goog-api-key": settings.gemini.api_key.get_secret_value()},
+                headers={"x-goog-api-key": settings.llm.api_key.get_secret_value()},
             )
-        deps["gemini_api"] = DependencyStatus(
+        deps["llm_api"] = DependencyStatus(
             healthy=resp.status_code < 500,
             detail=None if resp.status_code < 500 else f"HTTP {resp.status_code}",
         )
     except Exception as exc:  # noqa: BLE001
-        deps["gemini_api"] = DependencyStatus(healthy=False, detail=str(exc))
+        deps["llm_api"] = DependencyStatus(healthy=False, detail=str(exc))
 
     overall = "ok" if all(d.healthy for d in deps.values()) else "degraded"
 

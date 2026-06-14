@@ -14,7 +14,7 @@ Usage
     from pipeline.core.config import get_settings
 
     settings = get_settings()
-    model = settings.gemini.default_model
+    model = settings.llm.model
 
 Nothing outside this module should read ``os.environ`` directly.
 """
@@ -38,27 +38,35 @@ _ENV_FILES = (".env", "../.env", "../../.env")
 # ---------------------------------------------------------------------------
 
 
-class GeminiSettings(BaseSettings):
-    """Settings for Gemini model access via LiteLLM."""
+class EmbeddingSettings(BaseSettings):
+    """Settings for embedding generation."""
 
     model_config = SettingsConfigDict(
-        env_prefix="GEMINI_",
+        env_prefix="EMBEDDING_",
+        env_file=_ENV_FILES,
+        extra="ignore",
+    )
+
+    model: str = Field(
+        default="gemini/text-embedding-004",
+        description="Model used for embedding generation.",
+    )
+    api_key: SecretStr = Field(default=..., description="Embedding API key.")
+
+
+class LLMSettings(BaseSettings):
+    """Settings for LLM access via LiteLLM."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_",
         env_file=_ENV_FILES,
         extra="ignore",
     )
 
     # Model names used by each stage (override in config.yaml or env)
-    default_model: str = Field(
+    model: str = Field(
         default="gemini/gemini-2.0-flash",
         description="Model used for most stages.",
-    )
-    vision_model: str = Field(
-        default="gemini/gemini-2.0-flash",
-        description="Model used for stages that require native PDF vision.",
-    )
-    embedding_model: str = Field(
-        default="gemini/text-embedding-004",
-        description="Model used for embedding generation.",
     )
 
     # Generation parameters
@@ -69,8 +77,8 @@ class GeminiSettings(BaseSettings):
     max_retries: int = Field(default=3, ge=1, le=10)
     timeout_seconds: float = Field(default=120.0, ge=5.0)
 
-    # Auth — read from GEMINI_API_KEY env var
-    api_key: SecretStr = Field(default=..., description="Gemini API key.")
+    # Auth — read from LLM_API_KEY env var
+    api_key: SecretStr = Field(default=..., description="LLM API key.")
 
 
 class SupabaseSettings(BaseSettings):
@@ -172,7 +180,8 @@ class AppSettings(BaseSettings):
     )
 
     # Nested settings — each resolved independently from env
-    gemini: GeminiSettings = Field(default_factory=GeminiSettings)
+    embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
     supabase: SupabaseSettings = Field(default_factory=SupabaseSettings)
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
@@ -216,9 +225,10 @@ def _build_settings(yaml_path: Path | None = None) -> AppSettings:
         **{
             k: v
             for k, v in overrides.items()
-            if k not in ("gemini", "supabase", "langfuse", "pipeline")
+            if k not in ("llm", "supabase", "langfuse", "pipeline")
         },
-        gemini=cast(GeminiSettings, _section(GeminiSettings, "gemini")),
+        embedding=cast(EmbeddingSettings, _section(EmbeddingSettings, "embedding")),
+        llm=cast(LLMSettings, _section(LLMSettings, "llm")),
         supabase=cast(SupabaseSettings, _section(SupabaseSettings, "supabase")),
         langfuse=cast(LangfuseSettings, _section(LangfuseSettings, "langfuse")),
         pipeline=cast(PipelineSettings, _section(PipelineSettings, "pipeline")),
@@ -227,7 +237,7 @@ def _build_settings(yaml_path: Path | None = None) -> AppSettings:
 
 # ---------------------------------------------------------------------------
 # Cached singleton
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------
 
 
 @functools.lru_cache(maxsize=1)

@@ -152,16 +152,16 @@ async def _validate_mermaid(dsl: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-async def _call_gemini_diagram_async(
+async def _call_llm_diagram_async(
     prompt: str,
     diagram_type: DiagramType,
     run_id: str,
     collector: TelemetryCollector,
     max_retries: int = 3,
 ) -> str:
-    """Call Gemini to generate Mermaid DSL, with retry on syntax failure."""
+    """Call LLM to generate Mermaid DSL, with retry on syntax failure."""
     settings = get_settings()
-    model = settings.gemini.default_model
+    model = settings.llm.model
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
@@ -173,10 +173,10 @@ async def _call_gemini_diagram_async(
             response = await litellm.acompletion(
                 model=model,
                 messages=messages,
-                temperature=settings.gemini.temperature,
+                temperature=settings.llm.temperature,
                 max_tokens=8192,
                 num_retries=3,
-                api_key=settings.gemini.api_key.get_secret_value(),
+                api_key=settings.llm.api_key.get_secret_value(),
             )
             ctx.set_response(response)
 
@@ -404,12 +404,12 @@ async def diagram_node(state: PipelineState) -> dict[str, Any]:
 
         # ── Parallel LLM calls: all 3 diagram types at once ───────────────
         tasks = [
-            _call_gemini_diagram_async(
+            _call_llm_diagram_async(
                 prompt,
                 dt,
                 run_id=ctx.run_id,
                 collector=collector,
-                max_retries=ctx.settings.gemini.max_retries,
+                max_retries=ctx.settings.llm.max_retries,
             )
             for prompt, dt in zip(prompts, diagram_types)
         ]

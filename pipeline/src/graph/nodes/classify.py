@@ -8,7 +8,7 @@ Responsibilities
 1. Check cache — load from DB if this paper was already classified.
 2. Fetch PDF bytes from Supabase Storage if not already in state.
 3. Render ``classify_v1.j2`` prompt.
-4. Send PDF + prompt to Gemini via LiteLLM (vision).
+4. Send PDF + prompt to LLM via LiteLLM (vision).
 5. Parse response into ``ClassificationResult`` Pydantic model.
 6. **Persist classification** to the ``papers`` metadata JSONB column.
 7. Update state: ``domain``, ``sub_domain``, ``classification_confidence``.
@@ -73,15 +73,15 @@ async def _fetch_pdf_bytes(storage_path: str) -> bytes:
     return await asyncio.to_thread(_do_download)
 
 
-async def _call_gemini_classify(
+async def _call_llm_classify(
     pdf_bytes: bytes,
     prompt: str,
     run_id: str,
     collector: TelemetryCollector,
 ) -> ClassificationResult:
-    """Send the PDF + classify prompt to Gemini and parse the response."""
+    """Send the PDF + classify prompt to LLM and parse the response."""
     settings = get_settings()
-    model = settings.gemini.vision_model
+    model = settings.llm.model
 
     pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
@@ -94,7 +94,7 @@ async def _call_gemini_classify(
                     "text": prompt,
                 },
                 {
-                    "type": "image_url",
+                    "type": "image_url",  ## SHould this be "file" instead of "image_url" for PDF input? Answer:
                     "image_url": {
                         "url": f"data:application/pdf;base64,{pdf_b64}",
                     },
@@ -107,11 +107,11 @@ async def _call_gemini_classify(
         response = await litellm.acompletion(
             model=model,
             messages=messages,
-            temperature=settings.gemini.temperature,
+            temperature=settings.llm.temperature,
             max_tokens=4096,  # Increased to prevent truncation
             num_retries=3,
             response_format=ClassificationResult,
-            api_key=settings.gemini.api_key.get_secret_value(),
+            api_key=settings.llm.api_key.get_secret_value(),
         )
         ctx.set_response(response)
 
@@ -242,10 +242,10 @@ async def classify_node(state: PipelineState) -> dict[str, Any]:
                     "classify_node requires pdf_bytes or a valid pdf_storage_path."
                 )
 
-        # ── 3. Load prompt and call Gemini ───────────────────────────────
+        # ── 3. Load prompt and call LLM ────────────────────────────────
         prompt = render_prompt(_PROMPT_PATH)
         collector = TelemetryCollector(run_id=ctx.run_id, paper_id=ctx.paper_id)
-        result = await _call_gemini_classify(pdf_bytes, prompt, ctx.run_id, collector)
+        result = await _call_llm_classify(pdf_bytes, prompt, ctx.run_id, collector)
 
         ctx.token_usage[_STAGE] = collector.total_tokens
 

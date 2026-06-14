@@ -34,7 +34,7 @@ class TestTelemetryRecord:
         rec = TelemetryRecord(
             run_id="r1",
             stage_name="extract",
-            model="gemini/flash",
+            model="llm/flash",
             input_tokens=1000,
             output_tokens=500,
         )
@@ -61,7 +61,7 @@ class TestTelemetryCollector:
         return TelemetryRecord(
             run_id="run-001",
             stage_name=stage,
-            model="gemini/flash",
+            model="llm/flash",
             input_tokens=input_t,
             output_tokens=output_t,
             latency_ms=200.0,
@@ -160,17 +160,13 @@ class TestTrackLLMCall:
 
     def test_record_added_after_context(self):
         collector = self._make_collector()
-        with track_llm_call(
-            collector, stage_name="extract", model="gemini/flash"
-        ) as ctx:
+        with track_llm_call(collector, stage_name="extract", model="llm/flash") as ctx:
             ctx.set_response(_MockResponse())
         assert len(collector.records) == 1
 
     def test_token_counts_extracted(self):
         collector = self._make_collector()
-        with track_llm_call(
-            collector, stage_name="extract", model="gemini/flash"
-        ) as ctx:
+        with track_llm_call(collector, stage_name="extract", model="llm/flash") as ctx:
             ctx.set_response(_MockResponse())
         rec = collector.records[0]
         assert rec.input_tokens == 400
@@ -178,9 +174,7 @@ class TestTrackLLMCall:
 
     def test_latency_is_positive(self):
         collector = self._make_collector()
-        with track_llm_call(
-            collector, stage_name="ingest", model="gemini/flash"
-        ) as ctx:
+        with track_llm_call(collector, stage_name="ingest", model="llm/flash") as ctx:
             time.sleep(0.01)  # 10ms minimum
             ctx.set_response(_MockResponse())
         rec = collector.records[0]
@@ -190,7 +184,7 @@ class TestTrackLLMCall:
         """Telemetry should be recorded even if the LLM call raises."""
         collector = self._make_collector()
         with pytest.raises(RuntimeError):
-            with track_llm_call(collector, stage_name="extract", model="gemini/flash"):
+            with track_llm_call(collector, stage_name="extract", model="llm/flash"):
                 raise RuntimeError("boom")
         # Record is still appended (with zeroed counts)
         assert len(collector.records) == 1
@@ -198,7 +192,7 @@ class TestTrackLLMCall:
     def test_no_response_set_gives_zero_tokens(self):
         """If ctx.set_response() is never called, token counts default to 0."""
         collector = self._make_collector()
-        with track_llm_call(collector, stage_name="summarise", model="gemini/flash"):
+        with track_llm_call(collector, stage_name="summarise", model="llm/flash"):
             pass  # no response set
         rec = collector.records[0]
         assert rec.input_tokens == 0
@@ -206,11 +200,9 @@ class TestTrackLLMCall:
 
     def test_stage_and_model_fields_set(self):
         collector = self._make_collector()
-        with track_llm_call(
-            collector, stage_name="classify", model="gemini/pro"
-        ) as ctx:
+        with track_llm_call(collector, stage_name="classify", model="llm/pro") as ctx:
             ctx.set_response(_MockResponse())
         rec = collector.records[0]
         assert rec.stage_name == "classify"
-        assert rec.model == "gemini/pro"
+        assert rec.model == "llm/pro"
         assert rec.run_id == "run-test"
