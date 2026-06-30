@@ -1,58 +1,99 @@
-# Research Pilot 🚀
+﻿# Research Pilot
 
-Research Pilot is an AI-powered research paper intelligence platform built for AI/ML engineers and researchers who need to go beyond just reading papers — they need to understand, implement, and build on them fast.
+<!-- Add the launch demo GIF at assets/demo/research-pilot-demo.gif before making the repo public. -->
 
-By dropping in a paper via PDF upload, arXiv URL, or DOI, Research Pilot processes it end to end using Gemini's native PDF understanding—reading not just the text but actual diagrams, tables, equations, and figures—and produces a complete, structured intelligence package in minutes.
+Research Pilot is an open source AI pipeline for turning machine learning papers into structured extraction, layered summaries, architecture diagrams, and implementation-oriented code. It is built for researchers, ML engineers, and technical readers who want to understand a paper well enough to compare it, search it, and start implementing it.
 
 ## What It Produces
 
-- **Structured Extraction**: Every meaningful component of the paper pulled into a clean, queryable format (method, architecture components, datasets, evaluation metrics, baselines, results).
-- **Multi-Level Summaries**: Four levels of understanding from a single paper (paragraph overview, section-by-section breakdown, key contributions bullet list, and ELI5).
-- **Architecture & Flow Diagrams**: Automatically generated clean SVGs for model architectures, training data pipelines, and inference flows.
-- **Implementation Code**: A working PyTorch skeleton that translates the paper's described architecture into actual code, paired with synthetic data generation.
+- **Structured extraction**: method, architecture, datasets, metrics, baselines, results, and limitations in a typed output bundle.
+- **Multi-level summaries**: short overview, section breakdown, key contributions, and simpler explanations for fast scanning.
+- **Architecture diagrams**: Mermaid/SVG-ready diagrams that expose model blocks, data flow, and training or inference paths.
+- **Implementation code**: generated Python/PyTorch-oriented source and notebook exports when the paper describes an implementable system.
+- **Searchable library**: processed papers are stored with embeddings so they can be searched by concept, method, architecture, or dataset.
 
-## What Makes It Different
+## How It Works
 
-Most AI research tools treat papers as documents to chat with. Research Pilot treats them as structured knowledge to extract, visualise, and implement. The output isn't a conversation — it's a **deployable intelligence package**.
-
-- **Automatic Architecture Diagrams & Code**: No existing tool automatically generates this level of technical output.
-- **Personal Semantically Searchable Library**: Every processed paper is embedded, stored, and searchable by concept, architecture type, dataset, or method—not just title.
-
-## The Stack
-
-- **Core Intelligence**: Gemini handles the PDF understanding, structured extraction, summarisation, diagram generation, PyTorch code generation, and embeddings.
-- **Frontend**: Next.js (TypeScript, Tailwind, App Router) user interface.
-- **Backend Pipeline**: Python-based (uv, Pydantic, Instructor) processing pipeline.
-- **Storage**: Supabase (Database, Auth, and Storage).
-- **Deployment**: Google Cloud Run.
-
-## Project Structure
-
-ResearchPilot uses a monorepo structure to keep the frontend and data processing pipeline tightly integrated.
-
-```text
-research-pilot/
-├── app/          # Next.js Frontend
-│   ├── src/      # Application Source
-│   └── ...       # Next.js Config
-├── pipeline/     # Python Data Pipeline
-│   ├── pyproject.toml
-│   └── ...       # Python Source
-└── docs/         # Additional Documentation
+```mermaid
+flowchart LR
+    A[PDF, arXiv URL, or DOI] --> B[FastAPI ingestion]
+    B --> C[Supabase Storage + Postgres]
+    C --> D[LangGraph pipeline]
+    D --> E[Gemini PDF understanding]
+    D --> F[Typed extraction]
+    D --> G[Summaries, diagrams, code, report]
+    G --> H[Vite React app]
 ```
 
-## Getting Started
+The backend is a Python 3.11 FastAPI service. A LangGraph pipeline runs ingestion, metadata extraction, domain classification, structured extraction, summaries, embeddings, diagrams, optional code generation, and report export. Supabase provides auth, Postgres, pgvector search, and object storage. The frontend is a Vite React app.
 
-### Prerequisites
+## Quickstart
 
-- Node.js (Latest LTS)
-- Python 3.10+ (and `uv`)
+```powershell
+git clone https://github.com/<your-org>/research-pilot.git
+cd research-pilot
+Copy-Item .env.example .env
+cd pipeline; uv sync --all-extras --dev; uv run alembic upgrade head; uv run uvicorn src.api.main:app --reload
+```
 
-### Development
+In a second terminal:
 
-- **Frontend**: `cd app && npm install && npm run dev`
-- **Pipeline**: `cd pipeline && uv run hello.py`
+```powershell
+cd app
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. The API runs on `http://localhost:8000`, with OpenAPI docs at `http://localhost:8000/docs`.
+
+## Tech Stack
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | React, Vite, TypeScript, Tailwind CSS, shadcn-style UI components |
+| API | FastAPI, Pydantic, SQLAlchemy async |
+| Pipeline | LangGraph, Instructor, LiteLLM, Gemini |
+| Storage | Supabase Auth, Postgres, Storage, pgvector |
+| Tooling | uv, Ruff, mypy, pytest, Vitest, GitHub Actions |
+
+## Self-Hosting
+
+The short version:
+
+1. Create a Supabase project with Postgres, Auth, and Storage enabled.
+2. Create `papers` and `outputs` storage buckets.
+3. Copy `.env.example` to `.env` and fill in Supabase, Gemini, and optional observability keys.
+4. Run `cd pipeline && uv run alembic upgrade head`.
+5. Start the API and frontend with the commands above.
+
+See [docs/self-hosting.md](docs/self-hosting.md) for the full guide.
+
+## Configuration
+
+Every environment variable is documented in [docs/configuration.md](docs/configuration.md). Backend settings are loaded from defaults, optional `config.yaml`, environment variables, and `.env` files. Frontend settings live in `app/.env.example`.
+
+## Documentation
+
+- [Architecture](ARCHITECTURE.md)
+- [API reference](docs/api.md)
+- [Self-hosting](docs/self-hosting.md)
+- [Adding a domain plugin](docs/adding-a-domain.md)
+- [Prompt engineering](docs/prompt-engineering.md)
+- [Configuration](docs/configuration.md)
+- [Roadmap](docs/Roadmap.md)
 
 ## Roadmap
 
-The detailed implementation plan has been laid out across 10 phases. You can find the entire roadmap documenting our progress in [docs/Roadmap.md](./docs/Roadmap.md).
+- Add more domain plugins beyond AI/ML.
+- Improve diagram quality for vision, robotics, and multimodal papers.
+- Add paper comparison and citation graph views.
+- Add Obsidian, Notion, and batch export workflows.
+- Build an evaluation harness for extraction quality.
+
+## Contributing
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), then look for issues labeled `good first issue`, `help wanted`, or `roadmap`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
