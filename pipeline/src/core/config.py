@@ -33,6 +33,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _ENV_FILES = (".env", "../.env", "../../.env")
 
 
+def _empty_secret() -> SecretStr:
+    """Return an empty SecretStr instance for optional settings defaults."""
+    return SecretStr("")
+
+
 # ---------------------------------------------------------------------------
 # Nested settings groups
 # ---------------------------------------------------------------------------
@@ -51,7 +56,9 @@ class EmbeddingSettings(BaseSettings):
         default="gemini/text-embedding-004",
         description="Model used for embedding generation.",
     )
-    api_key: SecretStr = Field(default=..., description="Embedding API key.")
+    api_key: SecretStr = Field(
+        default_factory=_empty_secret, description="Embedding API key."
+    )
 
 
 class LLMSettings(BaseSettings):
@@ -78,7 +85,9 @@ class LLMSettings(BaseSettings):
     timeout_seconds: float = Field(default=120.0, ge=5.0)
 
     # Auth — read from LLM_API_KEY env var
-    api_key: SecretStr = Field(default=..., description="LLM API key.")
+    api_key: SecretStr = Field(
+        default_factory=_empty_secret, description="LLM API key."
+    )
 
 
 class SupabaseSettings(BaseSettings):
@@ -90,11 +99,16 @@ class SupabaseSettings(BaseSettings):
         extra="ignore",
     )
 
-    url: str = Field(default=..., description="Supabase project URL.")
-    db_url: SecretStr = Field(default=..., description="PostgreSQL connection string.")
-    anon_key: SecretStr = Field(default=..., description="Supabase anon/public key.")
+    url: str = Field(default="", description="Supabase project URL.")
+    db_url: SecretStr = Field(
+        default_factory=_empty_secret, description="PostgreSQL connection string."
+    )
+    anon_key: SecretStr = Field(
+        default_factory=_empty_secret, description="Supabase anon/public key."
+    )
     service_role_key: SecretStr = Field(
-        default=..., description="Supabase service-role key (backend only)."
+        default_factory=_empty_secret,
+        description="Supabase service-role key (backend only).",
     )
 
     # Storage bucket names
@@ -111,8 +125,12 @@ class LangfuseSettings(BaseSettings):
         extra="ignore",
     )
 
-    public_key: SecretStr = Field(default=..., description="Langfuse public key.")
-    secret_key: SecretStr = Field(default=..., description="Langfuse secret key.")
+    public_key: SecretStr = Field(
+        default_factory=_empty_secret, description="Langfuse public key."
+    )
+    secret_key: SecretStr = Field(
+        default_factory=_empty_secret, description="Langfuse secret key."
+    )
     host: str = Field(
         default="https://cloud.langfuse.com",
         description="Langfuse host URL.",
