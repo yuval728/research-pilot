@@ -61,7 +61,7 @@ dev = [
 # Pydantic plugin — teaches mypy about field defaults so optional fields
 # don't require explicit arguments at call sites.
 plugins = ["pydantic.mypy"]
-python_version = "3.11"
+python_version = "3.12"
 exclude = "pipeline_demo\\.py|pipeline_demo_2\\.py"
 
 [[tool.mypy.overrides]]
