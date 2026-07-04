@@ -132,7 +132,7 @@ async def _call_llm_extract(
     client = instructor.from_litellm(litellm.acompletion)
 
     with track_llm_call(collector, stage_name=_STAGE, model=model) as ctx:
-        extraction, raw_response = await client.chat.completions.create_with_completion(
+        extraction, raw_response = await client.chat.completions.create_with_completion(  # type: ignore[misc, arg-type]
             model=model,
             response_model=AiMlExtraction,
             messages=messages,
