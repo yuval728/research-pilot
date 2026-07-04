@@ -44,10 +44,11 @@ from __future__ import annotations
 import base64
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, cast
 
 import instructor  # type: ignore[import-untyped]
 import litellm  # type: ignore[import-untyped]
+from openai.types.chat import ChatCompletionMessageParam
 from sqlalchemy import text
 
 from src.core.logger import get_logger
@@ -107,40 +108,47 @@ async def _call_llm_extract(
     api_key = settings.llm.api_key.get_secret_value()
     pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                # {
-                #     "type": "image_url",
-                #     "image_url": {
-                #         "url": f"data:application/pdf;base64,{pdf_b64}",
-                #     },
-                # },
-                {
-                    "type": "file",
-                    "file": {
-                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+    messages = cast(
+        list[ChatCompletionMessageParam],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    # {
+                    #     "type": "image_url",
+                    #     "image_url": {
+                    #         "url": f"data:application/pdf;base64,{pdf_b64}",
+                    #     },
+                    # },
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                        },
                     },
-                },
-            ],
-        }
-    ]
+                ],
+            }
+        ],
+    )
 
     # Patch LiteLLM client with Instructor for structured output + auto-retry
     client = instructor.from_litellm(litellm.acompletion)
 
     with track_llm_call(collector, stage_name=_STAGE, model=model) as ctx:
-        extraction, raw_response = await client.chat.completions.create_with_completion(  # type: ignore[misc, arg-type]
-            model=model,
-            response_model=AiMlExtraction,
-            messages=messages,
-            temperature=settings.llm.temperature,
-            max_tokens=settings.llm.max_output_tokens,
-            max_retries=settings.llm.max_retries,
-            api_key=api_key,
+        extraction_response = await cast(
+            Awaitable[tuple[AiMlExtraction, Any]],
+            client.chat.completions.create_with_completion(
+                model=model,
+                response_model=AiMlExtraction,
+                messages=messages,
+                temperature=settings.llm.temperature,
+                max_tokens=settings.llm.max_output_tokens,
+                max_retries=settings.llm.max_retries,
+                api_key=api_key,
+            ),
         )
+        extraction, raw_response = extraction_response
         ctx.set_response(raw_response)
 
     return extraction

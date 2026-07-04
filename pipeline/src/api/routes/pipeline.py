@@ -7,6 +7,7 @@ Pipeline run management — trigger runs, poll status, retry stages.
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -136,7 +137,7 @@ async def stream_run_status(
     pipeline_service: PipelineServiceDep,
     _user: CurrentUserDep,
 ) -> StreamingResponse:
-    async def event_generator():
+    async def event_generator() -> AsyncIterator[str]:
         last_payload: dict | None = None
         error_count = 0
         max_errors = 10
