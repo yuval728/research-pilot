@@ -1,6 +1,6 @@
 """
 pipeline.graph.nodes.extract
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ``extract_node`` — structured information extraction from the paper PDF.
 
 Responsibilities
@@ -15,6 +15,28 @@ Responsibilities
 6. Track tokens via ``TelemetryCollector``.
 7. Update state with ``extraction``.
 8. Emit ``STAGE_COMPLETED`` event.
+
+Why Instructor over raw LiteLLM?
+--------------------------------
+- **Automatic retry with validation feedback** — When Pydantic validation fails,
+  Instructor feeds the error back to the LLM as a correction prompt and retries
+  (up to ``max_retries``). This is critical for complex schemas like
+  ``AiMlExtraction`` where the model might miss required fields or use wrong types.
+  Manual retry loops would require 50+ lines of boilerplate per stage.
+
+- **Type-safe response models** — ``response_model=AiMlExtraction`` gives a
+  fully validated Pydantic instance, not a raw dict. No manual
+  ``model_validate()`` calls needed.
+
+- **Streaming support** — ``create_with_completion`` returns both the parsed
+  model and raw response (for token counting/telemetry).
+
+Cache Key Design:
+-----------------
+Cache key = (paper_id, schema_version) from the ``extractions`` table.
+Schema version comes from the domain plugin (currently "1.0" for AI/ML).
+When prompt template changes, bump schema_version in the domain plugin to
+invalidate cache. The ``_load_cached_extraction`` helper queries by both keys.
 """
 
 from __future__ import annotations

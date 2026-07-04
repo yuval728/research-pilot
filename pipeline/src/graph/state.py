@@ -59,12 +59,28 @@ class PipelineState(TypedDict):
         Supabase Storage path to the assembled Markdown report.
     stage_statuses:
         Dict mapping stage name → ``StageStatus`` enum value.
+        **Why StageStatus enum**: LangGraph conditional edges need deterministic
+        routing. String statuses like "done" vs "completed" would be fragile.
+        The enum ensures edges in edges.py can do exact comparisons.
     errors:
         Accumulated human-readable error messages across all stages.
+        **Error accumulation pattern**: Instead of failing fast, stages append
+        errors and continue. The ``report`` node runs regardless and surfaces
+        all errors in the final markdown. This makes partial failures debuggable
+        without losing successful stage outputs.
     token_usage:
         Dict mapping stage name → total tokens consumed by that stage.
+        **Token budget enforcement**: Before each LLM call, stages check
+        ``sum(token_usage.values())`` against ``PIPELINE_TOKEN_BUDGET_PER_PAPER``
+        (default 500k). Stages early-return with TokenBudgetExceededError
+        if the budget would be exceeded.
     cached_stages:
         Set of stage names whose results were served from cache.
+        **Cache key derivation**: Cache hits are determined by
+        (paper_id, stage_name, schema_version, prompt_version). The extraction
+        stage includes schema_version from the domain plugin; diagram includes
+        diagram_type in the key. Implemented in each node's _load_cached_*
+        helper.
     """
 
     run_id: str

@@ -13,6 +13,32 @@ Responsibilities
 6. **Persist classification** to the ``papers`` metadata JSONB column.
 7. Update state: ``domain``, ``sub_domain``, ``classification_confidence``.
 8. Emit ``STAGE_COMPLETED`` event.
+
+Why "file" not "image_url" for PDF Input?
+-----------------------------------------
+The LiteLLM/Gemini API accepts PDFs via the "file" content type (see
+``_call_llm_classify``). Using "image_url" with a data URI works for images
+but fails for multi-page PDFs — the model only sees the first page. The "file"
+type streams the full PDF to Gemini's native PDF understanding, which processes
+all pages, diagrams, tables, and equations.
+
+Confidence Threshold:
+---------------------
+The 0.5 threshold in ``should_continue_after_classify`` (edges.py) gates the
+entire pipeline. Papers below this confidence are routed to END. This prevents
+wasting LLM calls on out-of-domain papers (e.g., a biology paper submitted to
+an AI/ML pipeline would get low confidence and halt early).
+
+Cache Key Design:
+-----------------
+Cache key = (paper_id) stored in ``papers.metadata`` JSONB as:
+- ``cls_domain``
+- ``cls_sub_domain``
+- ``cls_confidence``
+
+This is lighter than a dedicated table — classification is a single small
+record per paper. The ``_load_cached_classification`` helper reads from this
+JSONB column directly.
 """
 
 from __future__ import annotations

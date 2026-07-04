@@ -20,6 +20,13 @@ Three execution paths
 This three-path design is the fix for both the cross-contamination bug
 (RC-3b) and the broken cache (RC-2a) — the ``paper_id`` is now always
 stable across the whole pipeline run.
+
+**Why paper_id stability matters for caching:**
+- Cache keys are derived from (paper_id, stage_name, schema_version, prompt_version)
+- If ingest_node generated a NEW paper_id on every run (old bug), extract/diagram/codegen
+  would never hit cache because the paper_id changed
+- Path 2 ensures that even when API layer pre-creates the paper record, we reuse
+  that exact paper_id for the entire pipeline run
 """
 
 from __future__ import annotations

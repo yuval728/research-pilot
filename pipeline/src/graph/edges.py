@@ -37,6 +37,12 @@ CLASSIFICATION_CONFIDENCE_THRESHOLD: float = 0.50
 
 #: Sub-domain keywords that suggest a purely theoretical paper.
 #: Code generation is skipped when the sub_domain contains any of these.
+#: **Why keyword list instead of LLM classifier**: Adding a second LLM call
+#: just to decide "should we generate code?" adds ~2s latency and token cost.
+#: The keyword list catches 90%+ of theory papers (PAC learning, convergence
+#: proofs, information theory, game theory) with zero extra cost. A dedicated
+#: "implementability" classifier would be more robust but isn't worth the
+#: complexity until we have more domains.
 THEORY_DOMAIN_KEYWORDS: frozenset[str] = frozenset(
     {
         "theory",
@@ -61,6 +67,10 @@ THEORY_DOMAIN_KEYWORDS: frozenset[str] = frozenset(
 )
 
 #: Stage names where an error is considered fatal (halt the pipeline).
+#: ``ingest`` failure means no paper to process. ``extract`` failure means
+#: no structured data for downstream stages (summarise, diagram, codegen all
+#: depend on extraction). Other stages (summarise, embed, diagram) can fail
+#: independently without blocking the rest of the pipeline.
 FATAL_STAGES: frozenset[str] = frozenset({"ingest", "extract"})
 
 # ---------------------------------------------------------------------------

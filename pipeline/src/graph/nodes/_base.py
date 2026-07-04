@@ -6,8 +6,34 @@ Shared utilities for pipeline graph nodes.
 Eliminates boilerplate duplication across all 8 node files by providing:
 - Cached Jinja2 environment singleton
 - Prompt template caching (avoids disk I/O on every LLM call)
-- Common state unpacking helper
+- Common state unpacking helper (NodeContext)
 - Standardised error handling and event emission
+
+Why NodeContext?
+----------------
+Every node was duplicating ~10 lines of state unpacking:
+    run_id = state["run_id"]
+    paper_id = state.get("paper_id")
+    errors = list(state.get("errors", []))
+    ...
+
+NodeContext centralises this and provides lazy-loaded settings (avoids
+redundant get_settings() calls which hit pydantic-settings cache).
+
+Why LRU Cache on Prompts?
+-------------------------
+Prompt templates are static files that never change during a process lifetime.
+Reading from disk on every LLM call adds ~1-5ms overhead. The @lru_cache
+on load_prompt_template() makes subsequent calls instant. Maxsize=16 covers
+all current templates (classify, extract, summarise, diagram, codegen, report
+× versions).
+
+Why Event Emission in NodeContext?
+----------------------------------
+All stages emit STAGE_COMPLETED/STAGE_FAILED events via the global event bus
+(default_bus). This decouples the pipeline from the realtime layer — the
+FastAPI SSE endpoint just subscribes to the bus. Without this, nodes would
+need to import Supabase Realtime directly, creating circular dependencies.
 """
 
 from __future__ import annotations

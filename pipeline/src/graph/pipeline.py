@@ -25,22 +25,37 @@ Graph topology
     extract ──[extract failed]──────► END
       │
       ▼
-    summarise
+    parallel_stages (summarise + embed + diagram + codegen)
       │
       ▼
-    embed
-      │
-      ▼
-    diagram
-      │
-      ▼ [conditional: theory domain?]
-    codegen ──────────────────────────┐
-      │                               │ (skipped for theory papers)
-      ▼                               ▼
-    report ◄──────────────────────────┘
+    report
       │
       ▼
      END
+
+Why This Topology?
+------------------
+1. **Sequential prefix (ingest → classify → extract)**: These stages have
+   strict data dependencies. Classify needs the PDF. Extract needs the domain
+   from classify. You cannot parallelize them.
+
+2. **Confidence gate after classify**: If the paper isn't confidently in our
+   domain (AI/ML), we halt early. No point running extraction on a biology paper.
+
+3. **Parallel fan-out after extract**: Summarise, embed, diagram, and codegen
+   all read from ``extraction`` and write to **disjoint state fields**. There
+   are zero data dependencies between them. Running sequentially would waste
+   wall-clock time waiting for each LLM call to finish before the next starts.
+
+4. **Codegen conditional skip**: The ``should_run_codegen`` edge checks
+   ``sub_domain`` for theory keywords (PAC learning, convergence, etc.). If
+   theoretical, we skip codegen entirely and go straight to report. This saves
+   ~30s and ~15k tokens per theory paper.
+
+5. **Report as sink**: The report node runs last regardless of which parallel
+   stages succeeded/failed. It aggregates all available outputs (including
+   errors) into the final markdown. This is the "best effort" pattern — you
+   always get a report, even if diagram or codegen failed.
 
 Parallelism
 -----------
@@ -52,6 +67,12 @@ uses ``asyncio.gather`` to fan out all four LLM workloads concurrently.
 
 This eliminates the idle time between stages (previously each waited for the
 previous to finish before even starting its first LLM call).
+
+The ``parallel_stages_node`` returns a single merged state dict. The
+``_merge_parallel_results`` helper handles merging list fields (union),
+dict fields (shallow merge), and set fields (union). This is necessary because
+LangGraph expects a single state update from each node, but ``asyncio.gather``
+returns a list of partial state dicts.
 
 Exports
 -------

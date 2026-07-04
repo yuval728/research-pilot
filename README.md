@@ -1,16 +1,23 @@
 ﻿# Research Pilot
 
-<!-- Add the launch demo GIF at assets/demo/research-pilot-demo.gif before making the repo public. -->
+![Research Pilot Demo](assets/demo/research-pilot-demo.gif)
 
-Research Pilot is an open source AI pipeline for turning machine learning papers into structured extraction, layered summaries, architecture diagrams, and implementation-oriented code. It is built for researchers, ML engineers, and technical readers who want to understand a paper well enough to compare it, search it, and start implementing it.
+[![CI](https://github.com/<your-org>/research-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-org>/research-pilot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+[![GitHub stars](https://img.shields.io/github/stars/<your-org>/research-pilot?style=social)](https://github.com/<your-org>/research-pilot/stargazers)
+
+Research Pilot is an open source AI pipeline that turns machine learning papers into structured extraction, layered summaries, architecture diagrams, and implementation-oriented code. It is built for researchers, ML engineers, and technical readers who want to understand a paper well enough to compare it, search it, and start implementing it.
 
 ## What It Produces
 
-- **Structured extraction**: method, architecture, datasets, metrics, baselines, results, and limitations in a typed output bundle.
-- **Multi-level summaries**: short overview, section breakdown, key contributions, and simpler explanations for fast scanning.
-- **Architecture diagrams**: Mermaid/SVG-ready diagrams that expose model blocks, data flow, and training or inference paths.
-- **Implementation code**: generated Python/PyTorch-oriented source and notebook exports when the paper describes an implementable system.
-- **Searchable library**: processed papers are stored with embeddings so they can be searched by concept, method, architecture, or dataset.
+| Output | Description | Preview |
+|--------|-------------|---------|
+| **Structured extraction** | Method, architecture, datasets, metrics, baselines, results, and limitations in a typed output bundle. | ![Extraction](assets/screenshots/extraction-sidebar.png) |
+| **Multi-level summaries** | Short overview, section breakdown, key contributions, and ELI5 explanations for fast scanning. | ![Summaries](assets/screenshots/multi-level-summary.png) |
+| **Architecture diagrams** | Mermaid/SVG-ready diagrams that expose model blocks, data flow, and training or inference paths. | ![Architecture diagram](assets/screenshots/attention-architecture-diagram.png) |
+| **Implementation code** | Generated Python/PyTorch-oriented source and notebook exports when the paper describes an implementable system. | ![Generated code](assets/screenshots/generated-pytorch-code.png) |
+| **Searchable library** | Processed papers are stored with embeddings so they can be searched by concept, method, architecture, or dataset. | — |
 
 ## How It Works
 
@@ -26,6 +33,35 @@ flowchart LR
 ```
 
 The backend is a Python 3.11 FastAPI service. A LangGraph pipeline runs ingestion, metadata extraction, domain classification, structured extraction, summaries, embeddings, diagrams, optional code generation, and report export. Supabase provides auth, Postgres, pgvector search, and object storage. The frontend is a Vite React app.
+
+### Pipeline Architecture
+
+```mermaid
+flowchart LR
+    subgraph Frontend
+        UI[Vite React App]
+    end
+    subgraph Backend
+        API[FastAPI API]
+        Auth[Supabase Auth]
+        DB[(Supabase Postgres + pgvector)]
+        Storage[Supabase Storage]
+    end
+    subgraph Pipeline
+        Graph[LangGraph Pipeline]
+        Gemini[Gemini via LiteLLM + Instructor]
+    end
+
+    UI --> API
+    API --> Auth
+    API --> DB
+    API --> Storage
+    API --> Graph
+    Graph --> Gemini
+    Graph --> DB
+    Graph --> Storage
+    DB --> Search[pgvector semantic search]
+```
 
 ## Quickstart
 
