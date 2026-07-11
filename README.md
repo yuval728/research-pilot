@@ -21,7 +21,7 @@ Research Pilot is an open source AI pipeline that turns machine learning papers 
 
 ## How It Works
 
-![Flow](assets/social/pipeline.jpg)
+![Research Pilot pipeline flow diagram](assets/social/pipeline.jpg)
 
 The backend is a Python 3.11 FastAPI service. A LangGraph pipeline runs ingestion, metadata extraction, domain classification, structured extraction, summaries, embeddings, diagrams, optional code generation, and report export. Supabase provides auth, Postgres, pgvector search, and object storage. The frontend is a Vite React app.
 
