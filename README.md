@@ -2,10 +2,10 @@
 
 ![Research Pilot Demo](assets/demo/research-pilot-demo.gif)
 
-[![CI](https://github.com/<your-org>/research-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-org>/research-pilot/actions/workflows/ci.yml)
+[![CI](https://github.com/yuval728/research-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/yuval728/research-pilot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
-[![GitHub stars](https://img.shields.io/github/stars/<your-org>/research-pilot?style=social)](https://github.com/<your-org>/research-pilot/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/yuval728/research-pilot?style=social)](https://github.com/yuval728/research-pilot/stargazers)
 
 Research Pilot is an open source AI pipeline that turns machine learning papers into structured extraction, layered summaries, architecture diagrams, and implementation-oriented code. It is built for researchers, ML engineers, and technical readers who want to understand a paper well enough to compare it, search it, and start implementing it.
 
@@ -21,16 +21,7 @@ Research Pilot is an open source AI pipeline that turns machine learning papers 
 
 ## How It Works
 
-```mermaid
-flowchart LR
-    A[PDF, arXiv URL, or DOI] --> B[FastAPI ingestion]
-    B --> C[Supabase Storage + Postgres]
-    C --> D[LangGraph pipeline]
-    D --> E[Gemini PDF understanding]
-    D --> F[Typed extraction]
-    D --> G[Summaries, diagrams, code, report]
-    G --> H[Vite React app]
-```
+![Research Pilot pipeline flow diagram](assets/social/pipeline.jpg)
 
 The backend is a Python 3.11 FastAPI service. A LangGraph pipeline runs ingestion, metadata extraction, domain classification, structured extraction, summaries, embeddings, diagrams, optional code generation, and report export. Supabase provides auth, Postgres, pgvector search, and object storage. The frontend is a Vite React app.
 
@@ -66,7 +57,7 @@ flowchart LR
 ## Quickstart
 
 ```powershell
-git clone https://github.com/<your-org>/research-pilot.git
+git clone https://github.com/yuval728/research-pilot.git
 cd research-pilot
 Copy-Item .env.example .env
 cd pipeline; uv sync --all-extras --dev; uv run alembic upgrade head; uv run uvicorn src.api.main:app --reload

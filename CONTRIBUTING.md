@@ -5,7 +5,7 @@ Thanks for helping improve Research Pilot. The project is early, so the best con
 ## Development Setup
 
 ```powershell
-git clone https://github.com/<your-org>/research-pilot.git
+git clone https://github.com/yuval728/research-pilot.git
 cd research-pilot
 Copy-Item .env.example .env
 ```
